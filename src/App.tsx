@@ -13,6 +13,15 @@ type Product = {
 };
 type CartItem = Product & { quantity: number };
 type OrderSelection = { product: Product; quantity: number };
+type Offer = {
+  id: "first-order" | "repeat-order";
+  title: string;
+  description: string;
+  threshold: number;
+  discount: number;
+  firstOrderOnly: boolean;
+  enabled: boolean;
+};
 const s3BaseUrl = "https://blast-crackers.s3.ap-south-1.amazonaws.com/";
 
 const seed: Product[] = [
@@ -75,6 +84,36 @@ const seed: Product[] = [
     image:
       "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=160&q=80",
   },
+  {
+    id: 7,
+    name: "Trail Blazer Crackers",
+    category: "Trail Crackers",
+    price: 65,
+    mrp: 220,
+    pack: "10 Pieces / Box",
+    image:
+      "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=160&q=80",
+  },
+  {
+    id: 8,
+    name: "Trail Thunder Shots",
+    category: "Trail Crackers",
+    price: 95,
+    mrp: 320,
+    pack: "10 Pieces / Box",
+    image:
+      "https://images.unsplash.com/photo-1530103862676-de8c9debad1d?auto=format&fit=crop&w=160&q=80",
+  },
+  {
+    id: 9,
+    name: "Trail Sparkler Combo",
+    category: "Trail Crackers",
+    price: 110,
+    mrp: 360,
+    pack: "6 Pieces / Box",
+    image:
+      "https://images.unsplash.com/photo-1508614589041-895b88991e3e?auto=format&fit=crop&w=160&q=80",
+  },
 ];
 const defaultCategories = [
   "Kids Collection",
@@ -90,16 +129,17 @@ const defaultCategories = [
   "Bijili Bombs",
   "Wala Crackers (Garlands)",
   "Fancy Spinners",
+  "Trail Crackers",
 ];
-const offers = [
-  { threshold: 2000, discount: 250 },
-  { threshold: 1000, discount: 100 },
+const defaultOffers: Offer[] = [
+  { id: "first-order", title: "Welcome first order", description: "Register and get ₹50 welcome bonus plus ₹100 off on your first qualifying purchase.", threshold: 1150, discount: 100, firstOrderOnly: true, enabled: true },
+  { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, firstOrderOnly: false, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
-type View = "login" | "shop" | "cart" | "catalogue" | "order-entry";
-const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", "order-entry": "#/order-entry" })[view];
+type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry";
+const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry" })[view];
 const viewForRoute = (): View => {
-  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/login": "login", "#/order-entry": "order-entry" } as Record<string, View>)[window.location.hash] || "login";
+  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry" } as Record<string, View>)[window.location.hash] || "login";
   return route === "catalogue" && localStorage.getItem("blast-admin-session") !== "true" ? "login" : route;
 };
 const downloadCartPdf = (
@@ -156,17 +196,34 @@ function readStorage<T>(key: string, fallback: T): T {
 
 function App() {
   const [products, setProducts] = useState<Product[]>(() =>
-    readStorage<Product[]>("blast-products", seed),
+    (() => {
+      const saved = readStorage<Product[]>("blast-products", seed);
+      return [...saved, ...seed.filter((product) => !saved.some((item) => item.id === product.id))];
+    })(),
   );
   const [cart, setCart] = useState<CartItem[]>(() =>
     readStorage<CartItem[]>("blast-cart", []),
   );
-  const [categories, setCategories] = useState<string[]>(() => readStorage<string[]>("blast-categories", defaultCategories));
-  const [category, setCategory] = useState(() => readStorage<string[]>("blast-categories", defaultCategories).includes("One Sound Crackers") ? "One Sound Crackers" : readStorage<string[]>("blast-categories", defaultCategories)[0] || "");
+  const [categories, setCategories] = useState<string[]>(() => {
+    const saved = readStorage<string[]>("blast-categories", defaultCategories);
+    return [...saved, ...defaultCategories.filter((item) => !saved.includes(item))];
+  });
+  const [offers, setOffers] = useState<Offer[]>(() => readStorage<Offer[]>("blast-offers", defaultOffers));
+  const [orderCount, setOrderCount] = useState(() => readStorage<number>("blast-order-count", 0));
+  const [category, setCategory] = useState(() => {
+    const saved = readStorage<string[]>("blast-categories", defaultCategories);
+    const available = [...saved, ...defaultCategories.filter((item) => !saved.includes(item))];
+    return available.includes("Trail Crackers") ? "Trail Crackers" : available[0] || "";
+  });
   const [view, setView] = useState<View>(() => viewForRoute());
   const [authOpen, setAuthOpen] = useState(false);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentAfterLogin, setPaymentAfterLogin] = useState(false);
   const [user, setUser] = useState<string | null>(() =>
     localStorage.getItem("blast-user"),
+  );
+  const [welcomeOpen, setWelcomeOpen] = useState(() =>
+    !localStorage.getItem("blast-welcome-claimed"),
   );
   useEffect(() => {
     localStorage.setItem("blast-products", JSON.stringify(products));
@@ -175,6 +232,12 @@ function App() {
     localStorage.setItem("blast-categories", JSON.stringify(categories));
   }, [categories]);
   useEffect(() => {
+    localStorage.setItem("blast-offers", JSON.stringify(offers));
+  }, [offers]);
+  useEffect(() => {
+    localStorage.setItem("blast-order-count", String(orderCount));
+  }, [orderCount]);
+  useEffect(() => {
     localStorage.setItem("blast-cart", JSON.stringify(cart));
   }, [cart]);
   const visible = products.filter((item) => item.category === category);
@@ -182,8 +245,10 @@ function App() {
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const offer = offers.find((item) => subtotal >= item.threshold);
-  const total = subtotal - (offer?.discount || 0);
+  const welcomeClaimed = Boolean(localStorage.getItem("blast-welcome-claimed"));
+  const activeOffer = offers.find((item) => item.enabled && subtotal >= item.threshold && (item.firstOrderOnly ? orderCount === 0 && welcomeClaimed : orderCount > 0));
+  const welcomeBonus = activeOffer?.id === "first-order" ? 50 : 0;
+  const total = Math.max(0, subtotal - (activeOffer?.discount || 0) - welcomeBonus);
   const count = cart.reduce((sum, item) => sum + item.quantity, 0);
   const changeQuantity = (product: Product, delta: number) =>
     setCart((items) => {
@@ -220,6 +285,18 @@ function App() {
     if (user) navigate("catalogue");
     else setAuthOpen(true);
   };
+  const startPayment = () => setPaymentOpen(true);
+  const requestPaymentLogin = () => {
+    setPaymentAfterLogin(true);
+    setAuthOpen(true);
+  };
+  const completePurchase = () => {
+    setPaymentOpen(false);
+    setOrderCount((count) => count + 1);
+    setCart([]);
+    alert("Payment successful. Your order has been recorded.");
+    navigate("shop");
+  };
   return (
     <div className="site-shell">
       {view !== "login" && (
@@ -250,7 +327,7 @@ function App() {
             <button onClick={() => setShopView("One Sound Crackers")}>
               Crackers
             </button>
-            <button onClick={() => setShopView()}>Refer and Earn</button>
+            <button className={view === "offers" ? "nav-active" : ""} onClick={() => navigate("offers")}>Offers</button>
             <button onClick={() => setShopView()}>About</button>
             <button onClick={() => setShopView()}>Contact</button>
           </nav>
@@ -396,14 +473,17 @@ function App() {
           cart={cart}
           subtotal={subtotal}
           total={total}
-          offer={offer}
+          offer={activeOffer}
+          welcomeBonus={welcomeBonus}
           count={count}
           onChange={changeQuantity}
           onBack={() => setShopView()}
           user={user}
-          onLogin={() => setAuthOpen(true)}
+          onLogin={requestPaymentLogin}
+          onCheckout={startPayment}
         />
       )}
+      {view === "offers" && <OffersPage offers={offers} onBack={() => setShopView()} />}
       {view === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); navigate("cart"); }} onCart={() => navigate("cart")} />
       )}
@@ -413,6 +493,8 @@ function App() {
           setProducts={setProducts}
           categories={categories}
           setCategories={setCategories}
+          offers={offers}
+          setOffers={setOffers}
           onWebsite={() => setShopView()}
           onLogout={() => {
             localStorage.removeItem("blast-admin-session");
@@ -448,8 +530,16 @@ function App() {
             setUser(name);
             localStorage.setItem("blast-user", name);
             setAuthOpen(false);
+            if (paymentAfterLogin) {
+              setPaymentAfterLogin(false);
+              setPaymentOpen(true);
+            }
           }}
         />
+      )}
+      {paymentOpen && <PaymentModal total={total} onClose={() => setPaymentOpen(false)} onPaid={completePurchase} />}
+      {welcomeOpen && view !== "login" && (
+        <WelcomeReward onClose={() => setWelcomeOpen(false)} />
       )}
     </div>
   );
@@ -474,26 +564,54 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
   return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">BLAST / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={products.length} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{Number(productId)} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{products.indexOf(item.product) + 1}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product, index) => <div className="entry-product" key={product.id}><b>#{index + 1}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
+function OffersPage({ offers, onBack }: { offers: Offer[]; onBack: () => void }) {
+  return (
+    <main className="offers-page">
+      <button className="back-link" onClick={onBack}>← Continue shopping</button>
+      <p className="admin-kicker">BLAST / OFFERS</p>
+      <h1>Celebrate more, save more.</h1>
+      <p className="offers-intro">Every offer is applied automatically at checkout when your order meets its condition.</p>
+      <div className="offer-cards">
+        <article className="offer-card welcome-offer-card">
+          <span className="offer-card-mark">₹50</span>
+          <div><p className="offer-card-kicker">REGISTER &amp; SAVE</p><h2>Welcome bonus</h2><p>Register before your first purchase to unlock a ₹50 welcome bonus.</p></div>
+        </article>
+        {offers.filter((offer) => offer.enabled).map((offer) => (
+          <article className="offer-card" key={offer.id}>
+            <span className="offer-card-mark">-{money(offer.discount)}</span>
+            <div><p className="offer-card-kicker">{offer.firstOrderOnly ? "FIRST PURCHASE ONLY" : "REPEAT PURCHASES"}</p><h2>{offer.title}</h2><p>{offer.description}</p><strong>Minimum cart value: {money(offer.threshold)}</strong></div>
+          </article>
+        ))}
+      </div>
+      <div className="offer-rules"><h2>How it works</h2><p>1. Claim the welcome reward from the home page.</p><p>2. Add crackers until your cart reaches the displayed minimum.</p><p>3. Your eligible discount and welcome bonus appear automatically before payment.</p></div>
+    </main>
+  );
+}
+
 function Cart({
   cart,
   subtotal,
   total,
   offer,
+  welcomeBonus,
   count,
   onChange,
   onBack,
   user,
   onLogin,
+  onCheckout,
 }: {
   cart: CartItem[];
   subtotal: number;
   total: number;
-  offer?: { threshold: number; discount: number };
+  offer?: Offer;
+  welcomeBonus: number;
   count: number;
   onChange: (product: Product, delta: number) => void;
   onBack: () => void;
   user: string | null;
   onLogin: () => void;
+  onCheckout: () => void;
 }) {
   return (
     <main className="cart-page">
@@ -550,23 +668,20 @@ function Cart({
           </p>
           {offer && (
             <p className="discount">
-              BLAST offer <b>-{money(offer.discount)}</b>
+              {offer.title} <b>-{money(offer.discount)}</b>
             </p>
           )}
+          {welcomeBonus > 0 && <p className="discount">Welcome bonus <b>-{money(welcomeBonus)}</b></p>}
           <hr />
           <h2>
             Total <b>{money(total)}</b>
           </h2>
           <p className="offer-note">
-            {offer
-              ? `You unlocked ₹${offer.discount} off!`
-              : "Spend ₹1,000 to get ₹100 off."}
+            {offer ? offer.description : "Check Offers for the qualifying purchase amount."}
           </p>
           <button
             disabled={!cart.length}
-            onClick={() =>
-              user ? alert("Payment gateway ready for integration.") : onLogin()
-            }
+            onClick={() => user ? onCheckout() : onLogin()}
           >
             Proceed to payment →
           </button>
@@ -607,6 +722,87 @@ function Auth({
         />
         <button type="submit">Continue →</button>
       </form>
+    </div>
+  );
+}
+
+function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () => void; onPaid: () => void }) {
+  const upiId = "9000488963@ybl";
+  const paymentUri = `upi://pay?pa=${upiId}&pn=BLAST%20FIREWORKS&am=${total}&cu=INR`;
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(paymentUri)}`;
+  const copyUpi = async () => {
+    await navigator.clipboard?.writeText(upiId);
+    alert("UPI number copied.");
+  };
+  return (
+    <div className="modal-backdrop payment-backdrop">
+      <section className="payment-box" aria-labelledby="payment-title">
+        <button type="button" className="close" onClick={onClose} aria-label="Close payment">×</button>
+        <p className="welcome-kicker">SECURE UPI PAYMENT</p>
+        <h2 id="payment-title">Pay {money(total)}</h2>
+        <p className="payment-intro">Scan the QR code with any UPI app or use the UPI number below to complete your order.</p>
+        <div className="qr-frame"><img src={qrCodeUrl} alt={`UPI payment QR code for ${money(total)}`} /></div>
+        <div className="upi-row"><div><small>UPI number</small><strong>{upiId}</strong></div><button type="button" onClick={copyUpi}>Copy</button></div>
+        <button className="payment-confirm" type="button" onClick={onPaid}>I have completed the payment</button>
+        <small className="payment-note">Your order is recorded after you confirm the payment.</small>
+      </section>
+    </div>
+  );
+}
+
+function WelcomeReward({ onClose }: { onClose: () => void }) {
+  const [step, setStep] = useState<"welcome" | "details" | "success">("welcome");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setStep("details"), 1800);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    localStorage.setItem("blast-welcome-claimed", JSON.stringify({ name, phone, email }));
+    setStep("success");
+  };
+
+  return (
+    <div className="modal-backdrop welcome-backdrop">
+      <section className="welcome-box" aria-labelledby="welcome-title">
+        <button type="button" className="close" onClick={onClose} aria-label="Close welcome offer">×</button>
+        {step === "welcome" && (
+          <div className="welcome-intro">
+            <span className="welcome-burst">✦</span>
+            <p className="welcome-kicker">A LITTLE CELEBRATION GIFT</p>
+            <h2 id="welcome-title">Welcome to BLAST!</h2>
+            <p>We are so glad you are here. Enjoy a bright start to your celebration with us.</p>
+            <strong className="reward-amount">₹50 <small>WELCOME REWARD</small></strong>
+            <span className="welcome-loading">Preparing your gift...</span>
+          </div>
+        )}
+        {step === "details" && (
+          <form className="welcome-form" onSubmit={submit}>
+            <p className="welcome-kicker">YOUR WELCOME GIFT IS READY</p>
+            <h2 id="welcome-title">Claim your ₹50 reward</h2>
+            <p>Tell us where to send your reward confirmation.</p>
+            <label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Enter your name" required autoFocus /></label>
+            <label>Mobile number<input value={phone} onChange={(event) => setPhone(event.target.value)} type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} placeholder="10-digit mobile number" required /></label>
+            <label>Email <span>(optional)</span><input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@example.com" /></label>
+            <button type="submit">Submit &amp; claim ₹50 →</button>
+            <small className="welcome-note">Your details stay private and are only used for this reward.</small>
+          </form>
+        )}
+        {step === "success" && (
+          <div className="welcome-intro welcome-success">
+            <span className="success-mark">✓</span>
+            <p className="welcome-kicker">REWARD CLAIMED</p>
+            <h2 id="welcome-title">₹50 is yours, {name}!</h2>
+            <p>Thank you for joining BLAST. Your welcome reward has been recorded successfully.</p>
+            <button type="button" onClick={onClose}>Start shopping</button>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -674,6 +870,8 @@ function Catalogue({
   setProducts,
   categories,
   setCategories,
+  offers,
+  setOffers,
   onWebsite,
   onLogout,
 }: {
@@ -681,6 +879,8 @@ function Catalogue({
   setProducts: (products: Product[]) => void;
   categories: string[];
   setCategories: (categories: string[]) => void;
+  offers: Offer[];
+  setOffers: (offers: Offer[]) => void;
   onWebsite: () => void;
   onLogout: () => void;
 }) {
@@ -846,6 +1046,21 @@ function Catalogue({
         <div className="admin-products-head"><h2>Categories</h2><span>{categories.length} categories</span></div>
         <div className="category-form"><input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Category name" /><button onClick={saveCategory}>{editingCategory ? "Save category" : "Add category"}</button>{editingCategory && <button className="cancel-edit" onClick={() => { setEditingCategory(null); setCategoryName(""); }}>Cancel</button>}</div>
         {categories.map((item) => <div className="admin-category-row" key={item}><strong>{item}</strong><button onClick={() => { setEditingCategory(item); setCategoryName(item); }}>Edit</button><button onClick={() => deleteCategory(item)}>Delete</button></div>)}
+      </section>
+      <section className="admin-products offer-manager">
+        <div className="admin-products-head"><h2>Offers &amp; checkout rules</h2><span>Edit the live customer offers</span></div>
+        {offers.map((offer) => (
+          <div className="offer-editor" key={offer.id}>
+            <div className="offer-editor-heading"><strong>{offer.title}</strong><label className="offer-toggle"><input type="checkbox" checked={offer.enabled} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label></div>
+            <div className="offer-editor-grid">
+              <label>Offer title<input value={offer.title} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, title: event.target.value } : item))} /></label>
+              <label>Minimum cart value<input type="number" min="0" value={offer.threshold} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, threshold: Number(event.target.value) } : item))} /></label>
+              <label>Discount value<input type="number" min="0" value={offer.discount} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, discount: Number(event.target.value) } : item))} /></label>
+              <label className="offer-description">Customer-facing condition<input value={offer.description} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, description: event.target.value } : item))} /></label>
+            </div>
+            <p className="offer-admin-note">{offer.firstOrderOnly ? "Runs once, on the customer's first order, after the ₹50 welcome bonus is claimed." : "Runs on orders after the first completed purchase."}</p>
+          </div>
+        ))}
       </section>
       <section className="admin-products">
         <div className="admin-products-head">

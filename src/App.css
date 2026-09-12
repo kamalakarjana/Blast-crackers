@@ -57,3 +57,66 @@
 .pending-selections .entry-product strong { color: var(--green); white-space: nowrap; }
 .selection-total { display: flex; justify-content: space-between; border-top: 2px solid #e6ebf0; margin-top: 8px; padding: 15px 0; font-weight: 800; }
 @media (max-width: 720px) { .entry-header { display: block; }.entry-header .download-pdf { margin-top: 12px; }.entry-header h1 { font-size: 28px; }.order-entry-grid { display: block; }.entry-reference { margin-top: 20px; } }
+.welcome-backdrop { background: #172235cc; }
+.welcome-box { position: relative; width: min(460px, 100%); overflow: hidden; background: #fffdf9; padding: 42px 40px 36px; box-shadow: 10px 10px 0 #f5c542; animation: welcome-in .35s ease-out both; }
+.welcome-box::before { content: ""; position: absolute; inset: 0 0 auto; height: 7px; background: linear-gradient(90deg, var(--orange), #f5c542, var(--green)); }
+.welcome-box .close { position: absolute; top: 12px; right: 15px; z-index: 1; border: 0; background: none; color: #8a95a5; font-size: 26px; line-height: 1; }
+.welcome-intro { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.welcome-burst { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 19px; border-radius: 50%; background: #fff0d6; color: var(--orange); font-size: 32px; animation: welcome-pulse 1.4s ease-in-out infinite; }
+.welcome-kicker { margin: 0 0 10px; color: var(--green); font-size: 11px; font-weight: 800; letter-spacing: 1.8px; }
+.welcome-box h2 { margin: 0 0 10px; color: var(--navy); font: 700 30px Georgia, serif; }
+.welcome-box p:not(.welcome-kicker) { margin: 0; color: #6d798a; line-height: 1.55; }
+.reward-amount { display: flex; flex-direction: column; margin: 25px 0 19px; color: var(--orange); font: 700 45px Georgia, serif; }
+.reward-amount small { margin-top: 3px; color: #8e795b; font: 800 10px Arial, sans-serif; letter-spacing: 1.5px; }
+.welcome-loading { color: #9aa4b1; font-size: 12px; }
+.welcome-form { padding-top: 7px; }
+.welcome-form h2 { font-size: 27px; }
+.welcome-form > p:not(.welcome-kicker) { margin-bottom: 24px; }
+.welcome-form label { display: block; margin-bottom: 15px; color: #556479; font-size: 12px; font-weight: 700; }
+.welcome-form label span { color: #9aa4b1; font-weight: 400; }
+.welcome-form input { display: block; width: 100%; margin-top: 7px; border: 1px solid #d7dfe5; border-radius: 4px; padding: 12px 13px; color: var(--navy); outline-color: var(--green); }
+.welcome-form > button, .welcome-success > button { width: 100%; margin-top: 5px; border: 0; border-radius: 5px; padding: 14px; background: var(--green); color: white; font-weight: 800; }
+.welcome-note { display: block; margin-top: 14px; color: #9aa4b1; font-size: 11px; text-align: center; }
+.success-mark { display: grid; place-items: center; width: 62px; height: 62px; margin-bottom: 18px; border-radius: 50%; background: #e7f9ed; color: var(--green); font-size: 34px; font-weight: 800; }
+.welcome-success h2 { font-size: 27px; }
+.welcome-success > button { margin-top: 25px; }
+.payment-backdrop { z-index: 12; }
+.payment-box { position: relative; width: min(430px, 100%); background: white; padding: 34px 32px 28px; text-align: center; box-shadow: 10px 10px 0 #c8f078; animation: welcome-in .3s ease-out both; }
+.payment-box h2 { margin: 0 0 8px; font: 700 30px Georgia, serif; }
+.payment-intro { margin: 0 auto 20px; color: var(--muted); line-height: 1.5; font-size: 14px; }
+.qr-frame { display: grid; place-items: center; width: 228px; height: 228px; margin: 0 auto 18px; border: 1px solid #e3e9e5; background: white; }
+.qr-frame img { width: 210px; height: 210px; image-rendering: pixelated; }
+.upi-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 14px; background: #f1fbf4; border-left: 3px solid var(--green); text-align: left; }
+.upi-row small, .upi-row strong { display: block; }
+.upi-row small { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.upi-row strong { letter-spacing: 1px; }
+.upi-row button { border: 1px solid #b9d7c3; border-radius: 4px; background: white; color: var(--green); padding: 8px 12px; font-weight: 700; }
+.payment-confirm { width: 100%; margin-top: 18px; border: 0; border-radius: 5px; padding: 14px; background: var(--green); color: white; font-weight: 800; }
+.payment-note { display: block; margin-top: 12px; color: #9aa4b1; font-size: 11px; }
+@keyframes welcome-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes welcome-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+@media (max-width: 520px) { .welcome-box { padding: 38px 24px 28px; }.welcome-box h2 { font-size: 26px; }.reward-amount { font-size: 40px; } }
+.offers-page { max-width: 1180px; margin: auto; padding: 50px 25px 80px; }
+.offers-page h1 { margin: 0 0 12px; font: 700 42px Georgia, serif; }
+.offers-intro { max-width: 620px; color: var(--muted); line-height: 1.6; }
+.offer-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 34px; }
+.offer-card { min-height: 220px; background: white; border-top: 5px solid var(--green); padding: 26px; box-shadow: 0 4px 16px #1822350d; }
+.welcome-offer-card { border-top-color: var(--orange); }
+.offer-card-mark { display: inline-grid; place-items: center; min-width: 68px; height: 48px; margin-bottom: 25px; background: #e9faef; color: var(--green); font-size: 22px; font-weight: 800; }
+.welcome-offer-card .offer-card-mark { background: #fff0d9; color: var(--orange); }
+.offer-card-kicker { margin: 0 0 8px; color: var(--orange); font-size: 10px; font-weight: 800; letter-spacing: 1.4px; }
+.offer-card h2 { margin: 0 0 10px; font-size: 21px; }
+.offer-card p:not(.offer-card-kicker) { color: var(--muted); line-height: 1.5; font-size: 14px; }
+.offer-card strong { display: block; margin-top: 18px; color: var(--navy); font-size: 13px; }
+.offer-rules { margin-top: 28px; background: #fff8ee; border-left: 4px solid var(--orange); padding: 22px 26px; }
+.offer-rules h2 { margin-top: 0; }
+.offer-rules p { color: #6d798a; font-size: 14px; }
+.offer-editor { border-top: 1px solid #e6ebf0; padding: 18px 0 5px; }
+.offer-editor-heading { display: flex; justify-content: space-between; gap: 18px; align-items: center; }
+.offer-toggle { color: var(--muted); font-size: 12px; }
+.offer-editor-grid { display: grid; grid-template-columns: 1.2fr .7fr .7fr 2fr; gap: 14px; margin-top: 15px; }
+.offer-editor-grid label { color: #556479; font-size: 12px; font-weight: 700; }
+.offer-editor-grid input { display: block; width: 100%; border: 1px solid #d6dfe9; border-radius: 4px; padding: 10px; margin-top: 7px; }
+.offer-admin-note { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+@media (max-width: 820px) { .offer-cards { grid-template-columns: 1fr; }.offer-editor-grid { grid-template-columns: 1fr 1fr; }.offer-description { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .offers-page { padding: 30px 18px 60px; }.offers-page h1 { font-size: 32px; }.offer-editor-grid { grid-template-columns: 1fr; }.offer-description { grid-column: auto; } }
