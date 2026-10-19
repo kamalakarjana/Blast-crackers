@@ -188,6 +188,8 @@
 
 .catalog-photo-button,
 .catalog-remove-photo {
+  position: relative;
+  overflow: hidden;
   border: 1px solid #d5e8dc;
   border-radius: 5px;
   padding: 9px 12px;
@@ -199,7 +201,12 @@
 }
 
 .catalog-photo-button input {
-  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .catalog-remove-photo {

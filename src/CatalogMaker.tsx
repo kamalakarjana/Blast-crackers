@@ -23,6 +23,33 @@ function normalizeLabel(value: string) {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+async function saveProjectPhoto(productId: number, photo: ProductPhoto): Promise<string> {
+  const response = await fetch("/__save-product-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ productId, data: photo.data }),
+  });
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error("Project photo saving works only when running npm run dev from the project directory.");
+  }
+  const result = await response.json() as { image?: string; error?: string };
+  if (!response.ok || !result.image) {
+    throw new Error(result.error || "Photo could not be saved into the project.");
+  }
+  return result.image;
+}
+
+async function removeProjectPhoto(productId: number) {
+  const response = await fetch(`/__save-product-image?productId=${productId}`, { method: "DELETE" });
+  if (!response.headers.get("content-type")?.includes("application/json")) {
+    throw new Error("Project photo removal works only when running npm run dev from the project directory.");
+  }
+  const result = await response.json() as { error?: string };
+  if (!response.ok) {
+    throw new Error(result.error || "Saved project photo could not be removed.");
+  }
+}
+
 async function preparePhoto(file: File): Promise<ProductPhoto> {
   if (!file.type.startsWith("image/")) {
     throw new Error("Choose an image file.");
@@ -149,9 +176,11 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
 
 export default function CatalogMaker({
   products,
+  storageError,
   onProductImageChange,
 }: {
   products: CatalogProduct[];
+  storageError: string;
   onProductImageChange: (productId: number, image: string | null) => void;
 }) {
   const [photos, setPhotos] = useState<Record<number, ProductPhoto>>(() =>
@@ -179,11 +208,36 @@ export default function CatalogMaker({
     return matchesCategory && matchesSearch;
   }), [search, selectedCategory]);
 
+  const publishedImages = useMemo(
+    () => new Map(products.filter((product) => product.image.startsWith("/product-images/")).map((product) => [product.id, product.image])),
+    [products],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPublishedPhotos = async () => {
+      for (const [itemId, imageUrl] of publishedImages) {
+        try {
+          const response = await fetch(imageUrl);
+          if (!response.ok) throw new Error(`Could not load saved photo ${imageUrl}.`);
+          const blob = await response.blob();
+          const photo = await preparePhoto(new File([blob], `${itemId}.jpg`, { type: blob.type || "image/jpeg" }));
+          if (!cancelled) setPhotos((current) => current[itemId] ? current : { ...current, [itemId]: photo });
+        } catch (cause) {
+          if (!cancelled) setError(cause instanceof Error ? cause.message : "A saved project photo could not be loaded.");
+        }
+      }
+    };
+    void loadPublishedPhotos();
+    return () => { cancelled = true; };
+  }, [publishedImages]);
+
   const attachPhoto = async (itemId: number, file: File) => {
     try {
       const photo = await preparePhoto(file);
+      const imageUrl = await saveProjectPhoto(itemId, photo);
       setPhotos((current) => ({ ...current, [itemId]: photo }));
-      onProductImageChange(itemId, photo.data);
+      onProductImageChange(itemId, imageUrl);
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The image could not be loaded.");
@@ -228,7 +282,10 @@ export default function CatalogMaker({
         }
 
         try {
-          imported[item.id] = await preparePhoto(file);
+          const photo = await preparePhoto(file);
+          const imageUrl = await saveProjectPhoto(item.id, photo);
+          imported[item.id] = photo;
+          onProductImageChange(item.id, imageUrl);
           claimedItems.add(item.id);
         } catch (cause) {
           failed.push(`${file.name}: ${cause instanceof Error ? cause.message : "could not be loaded"}`);
@@ -236,9 +293,6 @@ export default function CatalogMaker({
       }
 
       setPhotos((current) => ({ ...current, ...imported }));
-      Object.entries(imported).forEach(([itemId, photo]) => {
-        onProductImageChange(Number(itemId), photo.data);
-      });
       const result = `Imported ${Object.keys(imported).length} photos from ${imageFiles.length} image files.`;
       const skipped = unmatched.length
         ? ` ${unmatched.length} file${unmatched.length === 1 ? "" : "s"} did not match a catalog item and were skipped: ${unmatched.slice(0, 6).join(", ")}${unmatched.length > 6 ? ", and more" : ""}.`
@@ -272,13 +326,14 @@ export default function CatalogMaker({
         <div>
           <p className="catalog-maker-kicker">SLV CRACKERS / PDF BUILDER</p>
           <h1>Create your illustrated price list</h1>
-          <p>Photo changes save to the customer site in this browser immediately. Items without a photo will still appear with their name and price.</p>
+          <p>When running locally with npm run dev, photos save under public/product-images and appear on the website. Commit the saved images and productImages.json to publish them.</p>
         </div>
         <button className="catalog-download" type="button" onClick={handleDownload} disabled={isDownloading}>
           {isDownloading ? "Preparing PDF..." : "Download PDF"}
         </button>
       </header>
 
+      {storageError && <p className="catalog-maker-error" role="alert">{storageError}</p>}
       <section className="catalog-maker-tools" aria-label="Find products">
         <label>
           Search products
@@ -317,8 +372,8 @@ export default function CatalogMaker({
         {visibleItems.map((item) => (
           <article className="catalog-maker-row" key={item.id}>
             <div className="catalog-maker-photo">
-              {photos[item.id]
-                ? <img src={photos[item.id].data} alt={`${item.name} product`} />
+              {photos[item.id] || publishedImages.has(item.id)
+                ? <img src={photos[item.id]?.data ?? publishedImages.get(item.id)} alt={`${item.name} product`} />
                 : <span>No photo yet</span>}
             </div>
             <div className="catalog-maker-details">
@@ -344,13 +399,19 @@ export default function CatalogMaker({
                 <button
                   className="catalog-remove-photo"
                   type="button"
-                  onClick={() => {
-                    setPhotos((current) => {
-                      const next = { ...current };
-                      delete next[item.id];
-                      return next;
-                    });
-                    onProductImageChange(item.id, null);
+                  onClick={async () => {
+                    try {
+                      await removeProjectPhoto(item.id);
+                      setPhotos((current) => {
+                        const next = { ...current };
+                        delete next[item.id];
+                        return next;
+                      });
+                      onProductImageChange(item.id, null);
+                      setError("");
+                    } catch (cause) {
+                      setError(cause instanceof Error ? cause.message : "Photo could not be removed from the project.");
+                    }
                   }}
                 >
                   Remove

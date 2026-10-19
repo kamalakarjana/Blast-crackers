@@ -2,7 +2,10 @@ import { useEffect, useState, type FormEvent } from "react";
 import { jsPDF } from "jspdf";
 import CatalogMaker from "./CatalogMaker";
 import { crackerCatalog } from "./crackerCatalog";
+import productImages from "./productImages.json";
 import "./App.css";
+
+const productImagePaths = productImages as Record<string, string>;
 
 type Product = {
   id: number;
@@ -30,7 +33,7 @@ const seed: Product[] = crackerCatalog.map((item, index) => ({
   category: item.category,
   price: parsePrice(item.price),
   pack: "As per product listing",
-  image: "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
+  image: productImagePaths[String(index + 1)] ?? "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
 }));
 const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
 const getInitialProducts = () => {
@@ -108,6 +111,7 @@ function readStorage<T>(key: string, fallback: T): T {
 
 function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
+  const [productStorageError, setProductStorageError] = useState("");
   const [cart, setCart] = useState<CartItem[]>(() =>
     readStorage<CartItem[]>("blast-cart", []),
   );
@@ -128,7 +132,12 @@ function App() {
     !localStorage.getItem("blast-welcome-claimed"),
   );
   useEffect(() => {
-    localStorage.setItem("blast-products", JSON.stringify(products));
+    try {
+      localStorage.setItem("blast-products", JSON.stringify(products));
+      setProductStorageError("");
+    } catch {
+      setProductStorageError("This browser could not save the product photo. Free up browser storage and try again.");
+    }
   }, [products]);
   useEffect(() => {
     localStorage.setItem("blast-categories", JSON.stringify(categories));
@@ -391,6 +400,7 @@ function App() {
       {view === "pdf-builder" && (
         <CatalogMaker
           products={products}
+          storageError={productStorageError}
           onProductImageChange={(productId, image) => {
             const fallbackImage = seed.find((product) => product.id === productId)?.image ?? "";
             setProducts((current) =>
