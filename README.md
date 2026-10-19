@@ -82,9 +82,13 @@ server {
 }
 ```
 
-If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo and reward administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration. Do not enter the token on a public HTTP page.
+If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo, reward, and customer administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration and customer registration. Do not enter the token or customer contact details on a public HTTP page.
 
 Open **PDF Catalog** to add, replace, or remove product photos by category. In the admin dashboard, use **Manage category photos** for the same controls and edit the stacked shopping reward tiers. Enter the server's `PHOTO_UPLOAD_TOKEN` when saving changes. Product photos and reward tiers are stored under `PHOTO_STORAGE_DIR` and persist across app rebuilds. Viewing the site, product photos, and rewards is public; changing photos and rewards requires the token.
+
+Customer registrations collect a name, mobile number, email address, and explicit contact consent; passwords are not collected or stored. Records are written to `PHOTO_STORAGE_DIR/customers.json`. In **Shop management**, use **Customer registrations** and enter `PHOTO_UPLOAD_TOKEN` to view contacts and follow up by phone or email. The production customer API requires HTTPS or a local SSH tunnel, and the customer list also requires the token. Back up `PHOTO_STORAGE_DIR` securely and restrict access to that backup; it contains personal contact details. Local Vite development registrations are saved under the ignored project `data/` directory.
+
+The cart's **Download PDF** action creates a branded portrait order summary using the catalog's emerald-and-gold style, with itemized quantities, discounts, total, and unlocked shopping rewards.
 
 The downloadable portrait PDF groups the catalog into category headings and item/price tables across two pages. The Family Packs category includes the 45-Item Pack.
 

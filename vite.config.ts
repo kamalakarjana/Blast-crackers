@@ -1,4 +1,5 @@
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -46,7 +47,7 @@ function productImageWriter(): Plugin {
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
-        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers') {
+        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/customers') {
           next();
           return;
         }
@@ -63,6 +64,96 @@ function productImageWriter(): Plugin {
         const imageDirectory = resolve(root, 'public', 'product-images');
         const manifestPath = resolve(root, 'src', 'productImages.json');
         const rewardTiersPath = resolve(root, 'src', 'rewardTiers.json');
+        const customersPath = resolve(root, 'data', 'customers.json');
+
+        if (url.pathname === '/api/customers') {
+          const remoteAddress = request.socket.remoteAddress ?? '';
+          const isLocalRequest = remoteAddress === '::1'
+            || remoteAddress === '127.0.0.1'
+            || remoteAddress.startsWith('127.')
+            || remoteAddress.startsWith('::ffff:127.');
+          if (!isLocalRequest) {
+            sendJson(403, { error: 'Customer registrations are restricted to the local development machine.' });
+            return;
+          }
+          if (request.method === 'GET') {
+            void readFile(customersPath, 'utf8')
+              .then((contents) => {
+                const customers: unknown = JSON.parse(contents);
+                if (!Array.isArray(customers)) throw new Error('Saved customer registrations are invalid.');
+                sendJson(200, { customers });
+              })
+              .catch((error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT') sendJson(200, { customers: [] });
+                else {
+                  server.config.logger.error('Customer registrations could not be loaded.', {
+                    error: error instanceof Error ? error : new Error(String(error)),
+                  });
+                  sendJson(500, { error: 'Customer registrations could not be loaded.' });
+                }
+              });
+            return;
+          }
+          if (request.method !== 'POST') {
+            sendJson(405, { error: 'Use POST to register or GET to view registrations.' });
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let bodyBytes = 0;
+          request.setEncoding('utf8');
+          request.on('data', (chunk: string) => {
+            bodyBytes += Buffer.byteLength(chunk);
+            if (bodyBytes <= 100_000) chunks.push(Buffer.from(chunk));
+          });
+          request.on('end', async () => {
+            if (bodyBytes > 100_000) {
+              sendJson(413, { error: 'Registration details are too large.' });
+              return;
+            }
+            try {
+              const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+              const candidate = payload && typeof payload === 'object' && !Array.isArray(payload)
+                ? payload as Record<string, unknown>
+                : {};
+              if (candidate.consented !== true) {
+                sendJson(400, { error: 'Contact consent is required to register.' });
+                return;
+              }
+              const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+              const phone = typeof candidate.phone === 'string' ? candidate.phone.trim() : '';
+              const email = typeof candidate.email === 'string' ? candidate.email.trim().toLowerCase() : '';
+              if (name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone)
+                || email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+                sendJson(400, { error: 'Enter a valid name, 10-digit mobile number, and optional email address.' });
+                return;
+              }
+              let customers: Record<string, unknown>[] = [];
+              try {
+                const saved: unknown = JSON.parse(await readFile(customersPath, 'utf8'));
+                if (!Array.isArray(saved) || saved.length >= 10_000) {
+                  sendJson(507, { error: 'Customer registrations are full or invalid.' });
+                  return;
+                }
+                customers = saved as Record<string, unknown>[];
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+              }
+              const timestamp = new Date().toISOString();
+              customers.push({ id: randomUUID(), name, phone, email, registeredAt: timestamp, consentedAt: timestamp });
+              await mkdir(resolve(root, 'data'), { recursive: true });
+              const temporaryPath = `${customersPath}.${randomUUID()}.tmp`;
+              await writeFile(temporaryPath, `${JSON.stringify(customers, null, 2)}\n`, 'utf8');
+              await rename(temporaryPath, customersPath);
+              sendJson(201, { saved: true });
+            } catch (error) {
+              server.config.logger.error('Customer registration could not be saved.', {
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+              sendJson(500, { error: 'Customer registration could not be saved.' });
+            }
+          });
+          return;
+        }
 
         if (url.pathname === '/api/reward-tiers') {
           if (request.method === 'GET') {

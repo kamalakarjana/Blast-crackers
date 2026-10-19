@@ -147,6 +147,23 @@
 .reward-tier-admin-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .reward-token-label { display: grid; flex: 1; gap: 6px; color: #556479; font-size: 11px; font-weight: 700; }
 .reward-token-label input { min-width: 180px; min-height: 40px; border: 1px solid #d6dfe9; border-radius: 4px; padding: 9px 10px; font: inherit; }
+.contact-consent { display: flex; align-items: flex-start; gap: 9px; margin: 10px 0 16px; color: #556479; font-size: 12px; line-height: 1.5; }
+.contact-consent input[type="checkbox"] { flex: 0 0 16px; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--green); }
+.contact-security-note { display: block; margin: -7px 0 12px; color: #8b6220; font-size: 11px; line-height: 1.5; }
+.auth-box label:not(.contact-consent) { display: block; margin: 12px 0; color: #556479; font-size: 12px; font-weight: 700; }
+.auth-box label:not(.contact-consent) input { margin: 5px 0 0; }
+.auth-box > button[type="submit"]:disabled, .welcome-form button:disabled { cursor: wait; opacity: .7; }
+.customer-manager .offer-admin-note { max-width: 900px; line-height: 1.5; }
+.customer-token-label { display: grid; max-width: 460px; gap: 6px; margin: 15px 0; color: #556479; font-size: 12px; font-weight: 700; }
+.customer-token-label input { min-height: 40px; padding: 9px 10px; border: 1px solid #d6dfe9; border-radius: 4px; font: inherit; }
+.customer-load-button { width: auto; margin: 8px 0; }
+.customer-list { margin-top: 14px; border-top: 1px solid #e6ebf0; }
+.customer-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(110px, .7fr) minmax(180px, 1fr); align-items: center; gap: 12px; padding: 13px 8px; border-bottom: 1px solid #e6ebf0; }
+.customer-row > div { display: grid; gap: 4px; }
+.customer-row small, .customer-no-email { color: var(--muted); font-size: 11px; }
+.customer-row a { width: fit-content; color: #168153; font-size: 13px; overflow-wrap: anywhere; }
+.header-tools .customer-signout { padding: 8px 11px; border: 1px solid #d7e4da; border-radius: 6px; color: #17633b; font-size: 13px; font-weight: 700; }
+@media (max-width: 720px) { .customer-row { grid-template-columns: 1fr; gap: 7px; }.customer-load-button { width: 100%; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 @media (max-width: 720px) { .reward-progress-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.reward-tier-admin-actions { align-items: stretch; flex-direction: column; }.reward-tier-admin-actions .save-product { width: 100%; }.reward-token-label input { width: 100%; }.admin-actions { flex-wrap: wrap; } }
 .table-head, .product-row { grid-template-columns: 48px minmax(0, 1fr) 82px 150px 85px; }

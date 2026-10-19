@@ -19,12 +19,11 @@ type Product = {
 type CartItem = Product & { quantity: number };
 type OrderSelection = { product: Product; quantity: number };
 type Offer = {
-  id: "first-order" | "repeat-order";
+  id: "repeat-order";
   title: string;
   description: string;
   threshold: number;
   discount: number;
-  firstOrderOnly: boolean;
   enabled: boolean;
 };
 const parsePrice = (value: string | null) => Number(String(value ?? "0").replace(/[^0-9]/g, "")) || 0;
@@ -54,8 +53,7 @@ const getInitialProducts = () => {
   ];
 };
 const defaultOffers: Offer[] = [
-  { id: "first-order", title: "Welcome first order", description: "Register and get ₹50 welcome bonus plus ₹100 off on your first qualifying purchase.", threshold: 1150, discount: 100, firstOrderOnly: true, enabled: true },
-  { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, firstOrderOnly: false, enabled: true },
+  { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const getEarnedRewards = (tiers: RewardTier[], subtotal: number) =>
@@ -67,6 +65,29 @@ const rewardCopy = (tier: RewardTier) => [
   tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
   tier.bonusPack,
 ].filter(Boolean).join(" + ");
+type CustomerRegistration = { name: string; phone: string; email: string; consented: boolean };
+type CustomerRecord = Omit<CustomerRegistration, "consented"> & { id: string; registeredAt: string; consentedAt: string };
+function isCustomerRecord(value: unknown): value is CustomerRecord {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.id === "string"
+    && typeof candidate.name === "string"
+    && typeof candidate.phone === "string"
+    && typeof candidate.email === "string"
+    && typeof candidate.registeredAt === "string"
+    && typeof candidate.consentedAt === "string";
+}
+async function saveCustomerRegistration(customer: CustomerRegistration) {
+  const response = await fetch("/api/customers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(customer),
+  });
+  const result = await response.json() as { saved?: boolean; error?: string };
+  if (!response.ok || !result.saved) {
+    throw new Error(result.error || "Your registration could not be saved.");
+  }
+}
 type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry" | "pdf-builder";
 const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder" })[view];
 const viewForRoute = (): View => {
@@ -77,43 +98,160 @@ const downloadCartPdf = (
   cart: CartItem[],
   subtotal: number,
   total: number,
-  offer?: { threshold: number; discount: number },
+  offer?: Offer,
+  rewards: string[] = [],
 ) => {
-  const pdf = new jsPDF();
-  pdf.setFontSize(20);
-  pdf.text("SLV CRACKERS", 15, 20);
-  pdf.setFontSize(11);
-  pdf.text(`Cart summary - ${new Date().toLocaleDateString("en-IN")}`, 15, 29);
-  pdf.line(15, 34, 195, 34);
-  let y = 45;
-  const columns = [15, 28, 128, 145, 175];
-  const widths = [13, 100, 17, 30, 20];
-  const drawRow = (values: string[], height: number, bold = false) => {
-    pdf.setFont("helvetica", bold ? "bold" : "normal");
-    values.forEach((value, index) => {
-      pdf.rect(columns[index], y - 6, widths[index], height);
-      pdf.text(value, columns[index] + 2, y, { maxWidth: widths[index] - 4 });
-    });
-    y += height;
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const pdfMoney = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+  const margin = 10;
+  const colors = {
+    emerald: [18, 79, 58],
+    deepEmerald: [13, 58, 43],
+    gold: [207, 164, 76],
+    paleGold: [250, 245, 231],
+    lightGold: [229, 214, 178],
+    ink: [43, 54, 47],
+    muted: [111, 119, 108],
+    grid: [222, 224, 214],
+    stripe: [248, 249, 245],
+    white: [255, 255, 255],
   };
-  drawRow(["No.", "Product", "Qty", "Unit price", "Total"], 10, true);
+  const columnWidths = [12, 90, 16, 36, 36];
+  const columnX = columnWidths.reduce<number[]>((positions, width) => {
+    positions.push((positions.at(-1) ?? margin) + width);
+    return positions;
+  }, [margin]);
+  const tableHeaderY = 35;
+  const tableHeaderHeight = 8;
+  let y = tableHeaderY + tableHeaderHeight;
+
+  const drawPageHeader = () => {
+    pdf.setFillColor(...colors.deepEmerald as [number, number, number]);
+    pdf.rect(0, 0, pageWidth, 25, "F");
+    pdf.setFillColor(...colors.gold as [number, number, number]);
+    pdf.rect(0, 24, pageWidth, 1, "F");
+    pdf.setTextColor(...colors.white as [number, number, number]);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(18);
+    pdf.text("SLV CRACKERS", pageWidth / 2, 12, { align: "center" });
+    pdf.setFontSize(8);
+    pdf.setFont("helvetica", "normal");
+    pdf.text("ORDER SUMMARY", pageWidth / 2, 19, { align: "center" });
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(`Prepared ${new Date().toLocaleDateString("en-IN")}`, pageWidth / 2, 31, { align: "center" });
+    pdf.setFillColor(...colors.emerald as [number, number, number]);
+    pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, tableHeaderHeight, "F");
+    pdf.setTextColor(...colors.white as [number, number, number]);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7);
+    ["NO.", "ITEM NAME", "QTY", "UNIT PRICE", "AMOUNT"].forEach((label, index) => {
+      const align = index >= 2 ? "right" : "left";
+      const x = align === "right" ? columnX[index] + columnWidths[index] - 2 : columnX[index] + 2;
+      pdf.text(label, x, tableHeaderY + 5.3, { align });
+    });
+  };
+  const startNewPage = () => {
+    pdf.addPage();
+    y = tableHeaderY + tableHeaderHeight;
+    drawPageHeader();
+  };
+
+  drawPageHeader();
   cart.forEach((item, index) => {
-    const productName = pdf.splitTextToSize(`${item.name} (${item.pack})`, 96);
-    const rowHeight = Math.max(10, productName.length * 5 + 5);
-    if (y + rowHeight > 275) { pdf.addPage(); y = 20; drawRow(["No.", "Product", "Qty", "Unit price", "Total"], 10, true); }
-    drawRow([String(index + 1), productName.join("\n"), String(item.quantity), `Rs. ${item.price}`, `Rs. ${item.price * item.quantity}`], rowHeight);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    const productLines = pdf.splitTextToSize(item.name, columnWidths[1] - 5);
+    const packLines = pdf.splitTextToSize(item.pack, columnWidths[1] - 5);
+    const rowHeight = Math.max(11, productLines.length * 4 + packLines.length * 3 + 4);
+    if (y + rowHeight > pageHeight - 18) startNewPage();
+    const background = index % 2 === 0 ? colors.white : colors.stripe;
+    pdf.setDrawColor(...colors.grid as [number, number, number]);
+    pdf.setLineWidth(0.15);
+    columnWidths.forEach((width, column) => {
+      pdf.setFillColor(...background as [number, number, number]);
+      pdf.rect(columnX[column], y, width, rowHeight, "FD");
+    });
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(String(index + 1), columnX[0] + 2, y + 5.2);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    pdf.setTextColor(...colors.ink as [number, number, number]);
+    pdf.text(productLines, columnX[1] + 2, y + 4.5);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6.5);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(packLines, columnX[1] + 2, y + 4.5 + productLines.length * 4);
+    pdf.setTextColor(...colors.ink as [number, number, number]);
+    pdf.setFontSize(7.5);
+    pdf.text(String(item.quantity), columnX[2] + columnWidths[2] - 2, y + 5.2, { align: "right" });
+    pdf.text(pdfMoney(item.price), columnX[3] + columnWidths[3] - 2, y + 5.2, { align: "right" });
+    pdf.setFont("helvetica", "bold");
+    pdf.setTextColor(...colors.emerald as [number, number, number]);
+    pdf.text(pdfMoney(item.price * item.quantity), columnX[4] + columnWidths[4] - 2, y + 5.2, { align: "right" });
+    y += rowHeight;
   });
-  pdf.line(120, y, 195, y);
-  y += 8;
-  pdf.text(`Subtotal: Rs. ${subtotal}`, 145, y);
+
+  const summaryLines = [
+    { label: "Subtotal", value: pdfMoney(subtotal) },
+    ...(offer ? [{ label: offer.title, value: `-${pdfMoney(offer.discount)}` }] : []),
+  ];
+  const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${reward}`, pageWidth - margin * 2 - 4));
+  const rewardHeight = rewards.length ? 5 + rewardText.reduce((height, lines) => height + lines.length * 4.5, 0) : 0;
+  const summaryHeight = 7 + 6 + summaryLines.length * 7 + 16 + rewardHeight;
+  if (y + summaryHeight > pageHeight - 18) startNewPage();
   y += 7;
-  if (offer) {
-    pdf.text(`Discount: -Rs. ${offer.discount}`, 145, y);
+  pdf.setDrawColor(...colors.gold as [number, number, number]);
+  pdf.setLineWidth(0.45);
+  pdf.line(pageWidth - margin - 84, y, pageWidth - margin, y);
+  y += 6;
+  const summaryX = pageWidth - margin - 84;
+  summaryLines.forEach((line) => {
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(line.label, summaryX, y);
+    pdf.setTextColor(...colors.ink as [number, number, number]);
+    pdf.text(line.value, pageWidth - margin, y, { align: "right" });
     y += 7;
-  }
+  });
+  pdf.setFillColor(...colors.paleGold as [number, number, number]);
+  pdf.setDrawColor(...colors.lightGold as [number, number, number]);
+  pdf.roundedRect(summaryX - 2, y - 2, 86, 11, 1.5, 1.5, "FD");
   pdf.setFont("helvetica", "bold");
-  pdf.text(`Total: Rs. ${total}`, 145, y);
-  pdf.save("blast-cart.pdf");
+  pdf.setFontSize(10);
+  pdf.setTextColor(...colors.deepEmerald as [number, number, number]);
+  pdf.text("TOTAL", summaryX, y + 5);
+  pdf.text(pdfMoney(total), pageWidth - margin - 2, y + 5, { align: "right" });
+  y += 16;
+  if (rewards.length) {
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    pdf.setTextColor(...colors.deepEmerald as [number, number, number]);
+    pdf.text("SHOPPING REWARDS", margin, y);
+    y += 5;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    rewardText.forEach((lines) => {
+      pdf.text(lines, margin + 2, y);
+      y += lines.length * 4.5;
+    });
+  }
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(...colors.gold as [number, number, number]);
+    pdf.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(6);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
+  }
+  pdf.save("SLV_Crackers_Order_Summary.pdf");
 };
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -132,7 +270,7 @@ function App() {
     readStorage<CartItem[]>("blast-cart", []).map(migrateFamilyPack),
   );
   const categories = defaultCategories;
-  const [offers, setOffers] = useState<Offer[]>(() => readStorage<Offer[]>("blast-offers", defaultOffers));
+  const [offers, setOffers] = useState<Offer[]>(() => readStorage<Array<Offer & { id: string }>>("blast-offers", defaultOffers).filter((offer) => offer.id === "repeat-order"));
   const [rewardTiers, setRewardTiers] = useState<RewardTier[]>(initialRewardTiers);
   const [rewardTiersError, setRewardTiersError] = useState("");
   const [orderCount, setOrderCount] = useState(() => readStorage<number>("blast-order-count", 0));
@@ -145,9 +283,6 @@ function App() {
   const [paymentAfterLogin, setPaymentAfterLogin] = useState(false);
   const [user, setUser] = useState<string | null>(() =>
     localStorage.getItem("blast-user"),
-  );
-  const [welcomeOpen, setWelcomeOpen] = useState(() =>
-    !localStorage.getItem("blast-welcome-claimed"),
   );
   useEffect(() => {
     try {
@@ -214,10 +349,8 @@ function App() {
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const welcomeClaimed = Boolean(localStorage.getItem("blast-welcome-claimed"));
-  const activeOffer = offers.find((item) => item.enabled && subtotal >= item.threshold && (item.firstOrderOnly ? orderCount === 0 && welcomeClaimed : orderCount > 0));
-  const welcomeBonus = activeOffer?.id === "first-order" ? 50 : 0;
-  const total = Math.max(0, subtotal - (activeOffer?.discount || 0) - welcomeBonus);
+  const activeOffer = offers.find((item) => item.enabled && subtotal >= item.threshold && orderCount > 0);
+  const total = Math.max(0, subtotal - (activeOffer?.discount || 0));
   const earnedRewardTiers = getEarnedRewards(rewardTiers, subtotal);
   const rewardCandleValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.candleValue, 0);
   const rewardCrackerValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.crackerValue, 0);
@@ -266,6 +399,22 @@ function App() {
     setPaymentAfterLogin(true);
     setAuthOpen(true);
   };
+  const registerCustomer = async (customer: CustomerRegistration) => {
+    await saveCustomerRegistration(customer);
+    setUser(customer.name);
+    localStorage.setItem("blast-user", customer.name);
+    setAuthOpen(false);
+    if (paymentAfterLogin) {
+      setPaymentAfterLogin(false);
+      setPaymentOpen(true);
+    }
+  };
+  const signOutCustomer = () => {
+    localStorage.removeItem("blast-user");
+    setUser(null);
+    setPaymentAfterLogin(false);
+    setPaymentOpen(false);
+  };
   const completePurchase = () => {
     setPaymentOpen(false);
     setOrderCount((count) => count + 1);
@@ -312,11 +461,7 @@ function App() {
             <button>English⌄</button>
             <button>⌖ Location</button>
             <button aria-label="Toggle theme">☼</button>
-            {!welcomeClaimed && (
-              <button className="header-claim" onClick={() => setWelcomeOpen(true)}>
-                Claim ₹50
-              </button>
-            )}
+            {user && <button className="customer-signout" type="button" onClick={signOutCustomer}>Sign out</button>}
             <button
               className="header-cart"
               aria-label="Open cart"
@@ -475,7 +620,6 @@ function App() {
           subtotal={subtotal}
           total={total}
           offer={activeOffer}
-          welcomeBonus={welcomeBonus}
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           count={count}
@@ -551,21 +695,10 @@ function App() {
       {authOpen && (
         <Auth
           onClose={() => setAuthOpen(false)}
-          onAuth={(name) => {
-            setUser(name);
-            localStorage.setItem("blast-user", name);
-            setAuthOpen(false);
-            if (paymentAfterLogin) {
-              setPaymentAfterLogin(false);
-              setPaymentOpen(true);
-            }
-          }}
+          onAuth={registerCustomer}
         />
       )}
       {paymentOpen && <PaymentModal total={total} onClose={() => setPaymentOpen(false)} onPaid={completePurchase} />}
-      {welcomeOpen && view !== "login" && (
-        <WelcomeReward onClose={() => setWelcomeOpen(false)} />
-      )}
     </div>
   );
 }
@@ -595,17 +728,13 @@ function OffersPage({ offers, rewardTiers, rewardTiersError, onBack }: { offers:
       <button className="back-link" onClick={onBack}>← Continue shopping</button>
       <p className="admin-kicker">SLV / OFFERS</p>
       <h1>Celebrate more, save more.</h1>
-      <p className="offers-intro">Every offer is applied automatically at checkout when your order meets its condition.</p>
+      <p className="offers-intro">Shopping rewards and eligible repeat-order discounts are applied when your cart meets the conditions.</p>
       {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
       <div className="offer-cards">
-        <article className="offer-card welcome-offer-card">
-          <span className="offer-card-mark">₹50</span>
-          <div><p className="offer-card-kicker">REGISTER &amp; SAVE</p><h2>Welcome bonus</h2><p>Register before your first purchase to unlock a ₹50 welcome bonus.</p></div>
-        </article>
         {offers.filter((offer) => offer.enabled).map((offer) => (
           <article className="offer-card" key={offer.id}>
             <span className="offer-card-mark">-{money(offer.discount)}</span>
-            <div><p className="offer-card-kicker">{offer.firstOrderOnly ? "FIRST PURCHASE ONLY" : "REPEAT PURCHASES"}</p><h2>{offer.title}</h2><p>{offer.description}</p><strong>Minimum cart value: {money(offer.threshold)}</strong></div>
+            <div><p className="offer-card-kicker">REPEAT PURCHASES</p><h2>{offer.title}</h2><p>{offer.description}</p><strong>Minimum cart value: {money(offer.threshold)}</strong></div>
           </article>
         ))}
         {rewardTiers.filter((tier) => tier.enabled).map((tier) => {
@@ -677,7 +806,6 @@ function Cart({
   subtotal,
   total,
   offer,
-  welcomeBonus,
   rewardTiers,
   rewardTiersError,
   count,
@@ -691,7 +819,6 @@ function Cart({
   subtotal: number;
   total: number;
   offer?: Offer;
-  welcomeBonus: number;
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   count: number;
@@ -708,6 +835,11 @@ function Cart({
   const nextTier = rewardTiers
     .filter((tier) => tier.enabled && tier.threshold > subtotal)
     .sort((left, right) => left.threshold - right.threshold)[0];
+  const cartRewards = [
+    earnedCandleValue > 0 ? `${money(earnedCandleValue)} worth of candles` : "",
+    earnedCrackerValue > 0 ? `${money(earnedCrackerValue)} worth of crackers` : "",
+    ...earnedBonusPacks,
+  ].filter(Boolean);
 
   return (
     <main className="cart-page">
@@ -721,7 +853,7 @@ function Cart({
         <button
           className="download-pdf"
           disabled={!cart.length}
-          onClick={() => downloadCartPdf(cart, subtotal, total, offer)}
+          onClick={() => downloadCartPdf(cart, subtotal, total, offer, cartRewards)}
         >
           Download PDF
         </button>
@@ -775,7 +907,6 @@ function Cart({
               {offer.title} <b>-{money(offer.discount)}</b>
             </p>
           )}
-          {welcomeBonus > 0 && <p className="discount">Welcome bonus <b>-{money(welcomeBonus)}</b></p>}
           <hr />
           <h2>
             Total <b>{money(total)}</b>
@@ -803,31 +934,51 @@ function Auth({
   onAuth,
 }: {
   onClose: () => void;
-  onAuth: (name: string) => void;
+  onAuth: (customer: CustomerRegistration) => Promise<void>;
 }) {
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [consented, setConsented] = useState(false);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await onAuth({ name, phone, email, consented });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Your registration could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <div className="modal-backdrop">
       <form
         className="auth-box"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onAuth(name || "Customer");
-        }}
+        onSubmit={(event) => void submit(event)}
       >
         <button type="button" className="close" onClick={onClose}>
           ×
         </button>
-        <h2>Welcome to SLV CRACKERS</h2>
-        <p>Login or register to continue checkout.</p>
-        <input required type="email" placeholder="Email address" />
-        <input required type="password" placeholder="Password" />
-        <input
+        <h2>Register your contact details</h2>
+        <p>We’ll save these details so the SLV team can follow up about your order.</p>
+        <label>Your name<input
+          required
+          minLength={2}
+          maxLength={100}
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Your name"
-        />
-        <button type="submit">Continue →</button>
+        /></label>
+        <label>Mobile number<input required type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="10-digit mobile number" /></label>
+        <label>Email address<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+        <label className="contact-consent"><input type="checkbox" required checked={consented} onChange={(event) => setConsented(event.target.checked)} />I agree that SLV Crackers may store these details and contact me about my enquiry or order.</label>
+        {!import.meta.env.DEV && <small className="contact-security-note">Contact details can be submitted only through the secure HTTPS site or a local SSH tunnel.</small>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button type="submit" disabled={saving}>{saving ? "Saving details..." : "Register & continue →"}</button>
       </form>
     </div>
   );
@@ -852,63 +1003,6 @@ function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () =
         <div className="upi-row"><div><small>UPI number</small><strong>{upiId}</strong></div><button type="button" onClick={copyUpi}>Copy</button></div>
         <button className="payment-confirm" type="button" onClick={onPaid}>I have completed the payment</button>
         <small className="payment-note">Your order is recorded after you confirm the payment.</small>
-      </section>
-    </div>
-  );
-}
-
-function WelcomeReward({ onClose }: { onClose: () => void }) {
-  const [step, setStep] = useState<"welcome" | "details" | "success">("welcome");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setStep("details"), 1800);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    localStorage.setItem("blast-welcome-claimed", JSON.stringify({ name, phone, email }));
-    setStep("success");
-  };
-
-  return (
-    <div className="modal-backdrop welcome-backdrop">
-      <section className="welcome-box" aria-labelledby="welcome-title">
-        <button type="button" className="close" onClick={onClose} aria-label="Close welcome offer">×</button>
-        {step === "welcome" && (
-          <div className="welcome-intro">
-            <span className="welcome-burst">✦</span>
-            <p className="welcome-kicker">A LITTLE CELEBRATION GIFT</p>
-            <h2 id="welcome-title">Welcome to SLV CRACKERS!</h2>
-            <p>We are so glad you are here. Enjoy a bright start to your celebration with us.</p>
-            <strong className="reward-amount">₹50 <small>WELCOME REWARD</small></strong>
-            <span className="welcome-loading">Preparing your gift...</span>
-          </div>
-        )}
-        {step === "details" && (
-          <form className="welcome-form" onSubmit={submit}>
-            <p className="welcome-kicker">YOUR WELCOME GIFT IS READY</p>
-            <h2 id="welcome-title">Claim your ₹50 reward</h2>
-            <p>Tell us where to send your reward confirmation.</p>
-            <label>Your name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Enter your name" required autoFocus /></label>
-            <label>Mobile number<input value={phone} onChange={(event) => setPhone(event.target.value)} type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} placeholder="10-digit mobile number" required /></label>
-            <label>Email <span>(optional)</span><input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@example.com" /></label>
-            <button type="submit">Submit &amp; claim ₹50 →</button>
-            <small className="welcome-note">Your details stay private and are only used for this reward.</small>
-          </form>
-        )}
-        {step === "success" && (
-          <div className="welcome-intro welcome-success">
-            <span className="success-mark">✓</span>
-            <p className="welcome-kicker">REWARD CLAIMED</p>
-            <h2 id="welcome-title">₹50 is yours, {name}!</h2>
-            <p>Thank you for joining SLV Crackers. Your welcome reward has been recorded successfully.</p>
-            <button type="button" onClick={onClose}>Start shopping</button>
-          </div>
-        )}
       </section>
     </div>
   );
@@ -1084,6 +1178,65 @@ function RewardTierManager({
   );
 }
 
+function CustomerRegistrationManager() {
+  const [token, setToken] = useState("");
+  const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const loadCustomers = async () => {
+    setLoading(true);
+    setError("");
+    setStatus("");
+    try {
+      const response = await fetch("/api/customers", {
+        headers: !import.meta.env.DEV && token.trim()
+          ? { Authorization: "Bearer " + token.trim() }
+          : {},
+      });
+      const result = await response.json() as { customers?: unknown; error?: string };
+      if (!response.ok) throw new Error(result.error || "Customer registrations could not be loaded.");
+      if (!Array.isArray(result.customers) || !result.customers.every(isCustomerRecord)) {
+        throw new Error("The server returned invalid customer registration data.");
+      }
+      setCustomers(result.customers);
+      setStatus(`${result.customers.length} registration${result.customers.length === 1 ? "" : "s"} loaded.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Customer registrations could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="admin-products customer-manager">
+      <div className="admin-products-head">
+        <h2>Customer registrations</h2>
+        <span>Contact details shared by customers</span>
+      </div>
+      <p className="offer-admin-note">Use customer contact details only to follow up on their enquiry or order. Records are stored on the server and are not included in backups unless you back up PHOTO_STORAGE_DIR.</p>
+      {!import.meta.env.DEV && <label className="customer-token-label">Server photo upload token<input type="password" value={token} autoComplete="off" onChange={(event) => setToken(event.target.value)} placeholder="Enter the server token" /></label>}
+      <button type="button" className="save-product customer-load-button" onClick={() => void loadCustomers()} disabled={loading}>
+        {loading ? "Loading registrations..." : "Load customer registrations"}
+      </button>
+      {error && <p className="catalog-maker-error" role="alert">{error}</p>}
+      {status && <p className="catalog-maker-status" role="status">{status}</p>}
+      {customers.length > 0 && (
+        <div className="customer-list">
+          {[...customers].reverse().map((customer) => (
+            <article className="customer-row" key={customer.id}>
+              <div><strong>{customer.name}</strong><small>Registered {new Date(customer.registeredAt).toLocaleString("en-IN")}</small></div>
+              <a href={`tel:${customer.phone}`}>{customer.phone}</a>
+              {customer.email ? <a href={`mailto:${customer.email}`}>{customer.email}</a> : <span className="customer-no-email">No email provided</span>}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Catalogue({
   products,
   setProducts,
@@ -1152,6 +1305,7 @@ function Catalogue({
           <button onClick={onLogout}>Sign out</button>
         </div>
       </div>
+      <CustomerRegistrationManager />
       <section className="admin-editor">
         <h2>
           {editing === null ? "Add a new cracker" : "Edit cracker details"}
@@ -1259,7 +1413,7 @@ function Catalogue({
               <label>Discount value<input type="number" min="0" value={offer.discount} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, discount: Number(event.target.value) } : item))} /></label>
               <label className="offer-description">Customer-facing condition<input value={offer.description} onChange={(event) => setOffers(offers.map((item) => item.id === offer.id ? { ...item, description: event.target.value } : item))} /></label>
             </div>
-            <p className="offer-admin-note">{offer.firstOrderOnly ? "Runs once, on the customer's first order, after the ₹50 welcome bonus is claimed." : "Runs on orders after the first completed purchase."}</p>
+            <p className="offer-admin-note">Runs on orders after the first completed purchase.</p>
           </div>
         ))}
       </section>
