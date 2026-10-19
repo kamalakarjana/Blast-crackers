@@ -1,6 +1,8 @@
 import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import { extname, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -20,6 +22,8 @@ const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const adminPassword = process.env.ADMIN_PASSWORD || '';
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4173);
+const tlsCertificatePath = process.env.TLS_CERT_FILE || '';
+const tlsPrivateKeyPath = process.env.TLS_KEY_FILE || '';
 const maximumProductId = 102;
 const maximumImageBytes = 1_500_000;
 const maximumRequestBytes = 2_100_000;
@@ -70,13 +74,13 @@ function getSession(request, kind) {
 
 function setSessionCookie(response, kind, token, request) {
   const cookieName = kind === 'admin' ? adminSessionCookie : customerSessionCookie;
-  const secure = request.headers['x-forwarded-proto'] === 'https';
+  const secure = Boolean(request.socket.encrypted) || request.headers['x-forwarded-proto'] === 'https';
   response.setHeader('Set-Cookie', `${cookieName}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionLifetimeMs / 1000}${secure ? '; Secure' : ''}`);
 }
 
 function clearSessionCookie(response, kind, request) {
   const cookieName = kind === 'admin' ? adminSessionCookie : customerSessionCookie;
-  const secure = request.headers['x-forwarded-proto'] === 'https';
+  const secure = Boolean(request.socket.encrypted) || request.headers['x-forwarded-proto'] === 'https';
   response.setHeader('Set-Cookie', `${cookieName}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? '; Secure' : ''}`);
 }
 
@@ -102,6 +106,7 @@ function isAuthorized(request) {
 }
 
 function isSecureUpload(request) {
+  if (request.socket.encrypted) return true;
   const remoteAddress = request.socket.remoteAddress || '';
   const isLoopback = remoteAddress === '::1'
     || remoteAddress === '127.0.0.1'
@@ -629,7 +634,11 @@ async function handleRewardTiersApi(request, response) {
   sendJson(response, 200, { tiers: body.tiers });
 }
 
-const server = createServer(async (request, response) => {
+if (Boolean(tlsCertificatePath) !== Boolean(tlsPrivateKeyPath)) {
+  throw new Error('Set both TLS_CERT_FILE and TLS_KEY_FILE to enable HTTPS.');
+}
+
+const requestHandler = async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/api/product-images') {
@@ -674,10 +683,17 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) sendJson(response, 500, { error: 'The server could not complete the request.' });
     else response.destroy();
   }
-});
+};
+
+const server = tlsCertificatePath
+  ? createHttpsServer({
+      cert: readFileSync(tlsCertificatePath),
+      key: readFileSync(tlsPrivateKeyPath),
+    }, requestHandler)
+  : createServer(requestHandler);
 
 server.listen(port, host, () => {
-  console.log(`Production site listening at http://${host}:${port}`);
+  console.log(`Production site listening at ${tlsCertificatePath ? 'https' : 'http'}://${host}:${port}`);
   console.log(uploadToken
     ? 'Administrator sessions and the configured upload token can manage product photos and rewards.'
     : 'Product photo and reward changes require an administrator session; PHOTO_UPLOAD_TOKEN is not configured.');

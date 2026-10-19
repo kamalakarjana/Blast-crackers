@@ -13,19 +13,25 @@ sudo mkdir -p /var/lib/slv-crackers
 sudo chown "$USER":"$USER" /var/lib/slv-crackers
 export PHOTO_UPLOAD_TOKEN="$(openssl rand -hex 32)"
 export PHOTO_STORAGE_DIR=/var/lib/slv-crackers
-export HOST=127.0.0.1
+export HOST=0.0.0.0
 export PORT=4173
 export ADMIN_EMAIL=owner@example.com
 export ADMIN_PASSWORD="$(openssl rand -hex 24)"
+export TLS_CERT_FILE=/etc/slv-crackers/tls/fullchain.pem
+export TLS_KEY_FILE=/etc/slv-crackers/tls/private-key.pem
 npm start
 ```
 
-For systemd, keep these values in `/etc/slv-crackers.env`, not in the frontend or a checked-in file. Create the file with `sudo nano /etc/slv-crackers.env` and set `PHOTO_UPLOAD_TOKEN`, `PHOTO_STORAGE_DIR`, `HOST`, `PORT`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`. Generate strong values for the secrets with `openssl rand -hex 32` and `openssl rand -hex 24`, then restrict the file:
+For permanent direct-IP access, reserve a static Elastic IP for the EC2 server and obtain a publicly trusted TLS certificate whose Subject Alternative Name includes that exact public IP address. Ordinary domain-only certificates and self-signed certificates will not work in browsers for this IP. Confirm your certificate authority supports public-IP certificates, including renewals; never disable certificate validation. Store the certificate chain and private key on the server with permissions that allow the `ubuntu` service account to read them while keeping the private key restricted.
+
+Keep settings in `/etc/slv-crackers.env`, not in the frontend or a checked-in file. Create it with `sudo nano /etc/slv-crackers.env` and set `PHOTO_UPLOAD_TOKEN`, `PHOTO_STORAGE_DIR`, `HOST=0.0.0.0`, `PORT=4173`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `TLS_CERT_FILE`, and `TLS_KEY_FILE`. Both TLS file settings are required to enable HTTPS:
 
 ```sh
 sudo chown root:root /etc/slv-crackers.env
 sudo chmod 600 /etc/slv-crackers.env
 ```
+
+Allow inbound TCP port 4173 in the EC2 security group and host firewall. With TLS configured, access the site using **`https://YOUR_STATIC_PUBLIC_IP:4173/`** (not `http://`). Use `/#/login` for customer accounts and `/#/admin/login` for the administrator. Renew the IP certificate before it expires and restart the service after renewal so Node loads the renewed files.
 
 For a persistent systemd deployment on the provided Ubuntu EC2 layout, install the included service:
 
@@ -36,7 +42,7 @@ sudo systemctl enable --now slv-crackers
 sudo systemctl status slv-crackers
 ```
 
-Restart it after a new build with `sudo systemctl restart slv-crackers`; inspect logs with `sudo journalctl -u slv-crackers -f`. Keep the token private, do not put it in frontend code, and do not expose port 4173 publicly. Put Nginx in front of the app and proxy requests to `127.0.0.1:4173`; expose ports 80/443 only. Keep `PHOTO_STORAGE_DIR` on persistent server storage, and back it up.
+Restart it after a new build or certificate renewal with `sudo systemctl restart slv-crackers`; inspect logs with `sudo journalctl -u slv-crackers -f`. Keep secrets private and do not put them in frontend code. Keep `PHOTO_STORAGE_DIR` on persistent server storage, and back it up.
 
 For a domain, point DNS at the server and configure TLS (for example, with Certbot). Proxy the HTTPS site to Node and redirect HTTP to HTTPS:
 
@@ -62,7 +68,7 @@ server {
 }
 ```
 
-If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo, reward, and customer administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration and customer registration. Do not enter the token or customer contact details on a public HTTP page.
+If the public-IP certificate is not installed yet, keep port 4173 private and use an SSH tunnel for administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration and customer registration. Do not enter the token or customer contact details on a public HTTP page.
 
 Open **PDF Catalog** to download the catalog. In the authenticated admin dashboard, use **Manage category photos** to add, replace, or remove product photos, and edit the stacked shopping reward tiers. Product photos and reward tiers are stored under `PHOTO_STORAGE_DIR` and persist across app rebuilds. Viewing the site, product photos, and rewards is public; changing photos and rewards requires an admin session (or the private upload token for direct API use).
 
