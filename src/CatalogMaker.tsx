@@ -16,7 +16,7 @@ type CatalogProduct = {
 
 const categories = [...new Set(crackerCatalog.map((item) => item.category))];
 const money = (price: string | null) => price ? `Rs. ${price}` : "Price not listed";
-const productsPerPage = 32;
+const productsPerPage = 51;
 const pdfPageCount = Math.ceil(crackerCatalog.length / productsPerPage);
 
 function normalizeLabel(value: string) {
@@ -88,16 +88,17 @@ async function preparePhoto(file: File): Promise<ProductPhoto> {
 }
 
 function downloadCatalog(photos: Record<number, ProductPhoto>) {
-  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 8;
-  const columns = 4;
+  const columns = 3;
   const gap = 2;
   const contentWidth = pageWidth - margin * 2;
   const cardWidth = (contentWidth - gap * (columns - 1)) / columns;
-  const cardHeight = 20;
-  const contentTop = 29;
+  const cardHeight = 14.5;
+  const rowGap = 0.7;
+  const contentTop = 25;
 
   const drawPageHeader = () => {
     pdf.setFillColor(54, 22, 91);
@@ -122,14 +123,14 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
       const column = index % columns;
       const row = Math.floor(index / columns);
       const x = margin + column * (cardWidth + gap);
-      const y = contentTop + row * (cardHeight + 1.5);
+      const y = contentTop + row * (cardHeight + rowGap);
 
       pdf.setDrawColor(226, 220, 233);
       pdf.setFillColor(250, 248, 252);
       pdf.roundedRect(x, y, cardWidth, cardHeight, 1.2, 1.2, "FD");
+      const imageBox = 11;
       const photo = photos[item.id];
       if (photo) {
-        const imageBox = 16;
         const dimensions = pdf.getImageProperties(photo.data);
         const scale = Math.min(imageBox / dimensions.width, imageBox / dimensions.height);
         const imageWidth = dimensions.width * scale;
@@ -137,33 +138,33 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
         pdf.addImage(
           photo.data,
           "JPEG",
-          x + 2 + (imageBox - imageWidth) / 2,
-          y + 2 + (imageBox - imageHeight) / 2,
+          x + 1.5 + (imageBox - imageWidth) / 2,
+          y + (cardHeight - imageHeight) / 2,
           imageWidth,
           imageHeight,
         );
       } else {
         pdf.setFillColor(238, 235, 242);
-        pdf.roundedRect(x + 2, y + 2, 16, 16, 1, 1, "F");
+        pdf.roundedRect(x + 1.5, y + (cardHeight - imageBox) / 2, imageBox, imageBox, 1, 1, "F");
         pdf.setTextColor(112, 105, 120);
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(5);
-        pdf.text("NO PHOTO", x + 10, y + 11, { align: "center" });
+        pdf.text("NO PHOTO", x + 1.5 + imageBox / 2, y + 8, { align: "center" });
       }
 
-      const textX = x + 21;
-      const textWidth = cardWidth - 23;
+      const textX = x + 14.5;
+      const textWidth = cardWidth - 16;
       pdf.setTextColor(115, 47, 174);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(5);
-      pdf.text(item.category.toUpperCase(), textX, y + 5, { maxWidth: textWidth });
+      pdf.setFontSize(4.2);
+      pdf.text(item.category.toUpperCase(), textX, y + 3, { maxWidth: textWidth });
       pdf.setTextColor(42, 31, 57);
-      pdf.setFontSize(7);
+      pdf.setFontSize(5.5);
       const nameLines = pdf.splitTextToSize(item.name, textWidth).slice(0, 2);
-      pdf.text(nameLines, textX, y + 10);
+      pdf.text(nameLines, textX, y + 6);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(7);
-      pdf.text(money(item.price), textX, y + 18, { maxWidth: textWidth });
+      pdf.setFontSize(5.5);
+      pdf.text(money(item.price), textX, y + 13, { maxWidth: textWidth });
     });
   }
 
