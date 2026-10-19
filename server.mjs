@@ -20,6 +20,7 @@ const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
   '.ico': 'image/x-icon',
+  '.jpg': 'image/jpeg',
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
@@ -100,14 +101,14 @@ async function readRequestBody(request) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function serveProductImage(response, productId) {
+async function serveProductImage(response, productId, extension) {
   for (const directory of [uploadDirectory, builtImageDirectory]) {
-    const imagePath = resolve(directory, `${productId}.jpg`);
+    const imagePath = resolve(directory, `${productId}.${extension}`);
     try {
       const image = await readFile(imagePath);
       response.writeHead(200, {
         'Cache-Control': 'public, max-age=300',
-        'Content-Type': 'image/jpeg',
+        'Content-Type': mimeTypes[`.${extension}`],
         'X-Content-Type-Options': 'nosniff',
       });
       response.end(image);
@@ -234,10 +235,10 @@ const server = createServer(async (request, response) => {
       sendJson(response, 405, { error: 'Method not allowed.' });
       return;
     }
-    const imageMatch = /^\/product-images\/([1-9]\d{0,2})\.jpg$/.exec(url.pathname);
+    const imageMatch = /^\/product-images\/([1-9]\d{0,2})\.(jpg|webp)$/.exec(url.pathname);
     if (imageMatch) {
       const productId = Number(imageMatch[1]);
-      if (productId > maximumProductId || !(await serveProductImage(response, productId))) {
+      if (productId > maximumProductId || !(await serveProductImage(response, productId, imageMatch[2]))) {
         sendJson(response, 404, { error: 'Product image not found.' });
       }
       return;
