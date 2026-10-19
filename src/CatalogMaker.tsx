@@ -119,31 +119,39 @@ function downloadCatalog() {
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 7;
   const columnWidths = [14, 142, 40];
-  const tableHeaderY = 31;
+  const tableHeaderY = 25;
   const tableHeaderHeight = 6;
   const contentTop = tableHeaderY + tableHeaderHeight;
+  const colors = {
+    emerald: [18, 79, 58],
+    deepEmerald: [13, 58, 43],
+    gold: [207, 164, 76],
+    paleGold: [250, 245, 231],
+    lightGold: [229, 214, 178],
+    ink: [43, 54, 47],
+    muted: [111, 119, 108],
+    grid: [222, 224, 214],
+    stripe: [248, 249, 245],
+    white: [255, 255, 255],
+  };
   const columnX = columnWidths.reduce<number[]>((positions, width) => {
     positions.push((positions.at(-1) ?? margin) + width);
     return positions;
   }, [margin]);
 
   const drawPageHeader = () => {
-    pdf.setFillColor(54, 22, 91);
+    pdf.setFillColor(colors.deepEmerald[0], colors.deepEmerald[1], colors.deepEmerald[2]);
     pdf.rect(0, 0, pageWidth, 21, "F");
-    pdf.setTextColor(255, 255, 255);
+    pdf.setFillColor(colors.gold[0], colors.gold[1], colors.gold[2]);
+    pdf.rect(0, 20, pageWidth, 1, "F");
+    pdf.setTextColor(colors.white[0], colors.white[1], colors.white[2]);
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(17);
-    pdf.text("SLV CRACKERS", margin, 10);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(7);
-    pdf.text("BRIGHT CELEBRATIONS | GREAT PRICES", margin, 16);
-    pdf.setTextColor(47, 39, 57);
-    pdf.setFontSize(8);
-    pdf.text("PRODUCT PRICE LIST  |  PRICES IN INDIAN RUPEES (INR)", margin, 27);
-    pdf.setFillColor(54, 22, 91);
-    pdf.setDrawColor(54, 22, 91);
+    pdf.setFontSize(18);
+    pdf.text("SLV CRACKERS", pageWidth / 2, 14, { align: "center" });
+    pdf.setFillColor(colors.emerald[0], colors.emerald[1], colors.emerald[2]);
+    pdf.setDrawColor(colors.emerald[0], colors.emerald[1], colors.emerald[2]);
     pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, tableHeaderHeight, "F");
-    pdf.setTextColor(255, 255, 255);
+    pdf.setTextColor(colors.white[0], colors.white[1], colors.white[2]);
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(7);
     pdf.text("NO.", columnX[0] + 2, tableHeaderY + 4.1);
@@ -156,25 +164,21 @@ function downloadCatalog() {
     drawPageHeader();
     let y = contentTop;
     for (const group of catalogPages[page]) {
-      pdf.setFillColor(239, 232, 248);
-      pdf.setDrawColor(220, 210, 232);
-      pdf.setLineWidth(0.2);
+      pdf.setFillColor(colors.paleGold[0], colors.paleGold[1], colors.paleGold[2]);
+      pdf.setDrawColor(colors.lightGold[0], colors.lightGold[1], colors.lightGold[2]);
+      pdf.setLineWidth(0.25);
       pdf.rect(margin, y, pageWidth - margin * 2, categoryHeaderHeight, "FD");
-      pdf.setTextColor(64, 28, 96);
+      pdf.setTextColor(colors.deepEmerald[0], colors.deepEmerald[1], colors.deepEmerald[2]);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(7);
-      pdf.text(group.category.toUpperCase(), margin + 2, y + 3.3);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(5.5);
-      pdf.setTextColor(105, 83, 122);
-      pdf.text(`${group.items.length} ITEMS`, pageWidth - margin - 2, y + 3.3, { align: "right" });
+      pdf.setFontSize(7.5);
+      pdf.text(group.category.toUpperCase(), pageWidth / 2, y + 3.3, { align: "center" });
       y += categoryHeaderHeight;
 
       group.items.forEach((item, index) => {
         const rowHeight = productRowHeight;
-        const rowBackground = index % 2 === 0 ? [255, 255, 255] : [250, 248, 252];
+        const rowBackground = index % 2 === 0 ? colors.white : colors.stripe;
         const itemTextY = y + 2.6;
-        pdf.setDrawColor(222, 218, 227);
+        pdf.setDrawColor(colors.grid[0], colors.grid[1], colors.grid[2]);
         pdf.setLineWidth(0.12);
         columnWidths.forEach((width, column) => {
           pdf.setFillColor(rowBackground[0], rowBackground[1], rowBackground[2]);
@@ -183,12 +187,12 @@ function downloadCatalog() {
 
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(6.5);
-        pdf.setTextColor(120, 112, 128);
+        pdf.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2]);
         pdf.text(String(item.id), columnX[0] + 2, itemTextY);
-        pdf.setTextColor(42, 31, 57);
-        pdf.text(item.name, columnX[1] + 2, itemTextY, { maxWidth: columnWidths[1] - 4 });
+        pdf.setTextColor(colors.ink[0], colors.ink[1], colors.ink[2]);
         pdf.setFont("helvetica", "bold");
-        pdf.setTextColor(64, 28, 96);
+        pdf.text(item.name, columnX[1] + 2, itemTextY, { maxWidth: columnWidths[1] - 4 });
+        pdf.setTextColor(colors.emerald[0], colors.emerald[1], colors.emerald[2]);
         pdf.text(money(item.price), columnX[2] + 2, itemTextY, { maxWidth: columnWidths[2] - 4 });
         y += rowHeight;
       });
@@ -198,9 +202,9 @@ function downloadCatalog() {
   const generatedPageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= generatedPageCount; page += 1) {
     pdf.setPage(page);
-    pdf.setDrawColor(230, 222, 235);
+    pdf.setDrawColor(colors.gold[0], colors.gold[1], colors.gold[2]);
     pdf.line(margin, pageHeight - 7, pageWidth - margin, pageHeight - 7);
-    pdf.setTextColor(100, 90, 110);
+    pdf.setTextColor(colors.muted[0], colors.muted[1], colors.muted[2]);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(6);
     pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${generatedPageCount}`, pageWidth - margin, pageHeight - 3, { align: "right" });
