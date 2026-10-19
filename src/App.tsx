@@ -391,6 +391,18 @@ function App() {
               </button>
             </div>
             {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
+            <section className="shop-offers-banner">
+              <div>
+                <p className="offer-card-kicker">SLV SHOPPING OFFERS</p>
+                <strong>
+                  {nextRewardTier
+                    ? `Spend ${money(nextRewardTier.threshold)} and get ${rewardCopy(nextRewardTier)}`
+                    : "Explore our current shopping offers"}
+                </strong>
+                <span>Rewards stack as you reach each target.</span>
+              </div>
+              <button type="button" onClick={() => navigate("offers")}>View all offers →</button>
+            </section>
             <RewardProgress
               subtotal={subtotal}
               earnedCandleValue={rewardCandleValue}
@@ -421,15 +433,16 @@ function App() {
                         className="product-photo"
                         style={{ backgroundImage: `url(${product.image})` }}
                       />
-                      <strong>{product.name}</strong>
-                      <small>{product.pack}</small>
-                      <span className="media-badges">▧ ●</span>
+                      <div className="product-details">
+                        <strong>{product.name}</strong>
+                        <small>{product.pack}</small>
+                      </div>
                     </div>
                     <strong className="best-price">
                       {money(product.price)}
                     </strong>
                     <div className="stepper">
-                      <button onClick={() => changeQuantity(product, -1)}>
+                      <button type="button" aria-label={`Decrease quantity for ${product.name}`} onClick={() => changeQuantity(product, -1)}>
                         −
                       </button>
                       <input
@@ -444,7 +457,7 @@ function App() {
                           )
                         }
                       />
-                      <button onClick={() => changeQuantity(product, 1)}>
+                      <button type="button" aria-label={`Increase quantity for ${product.name}`} onClick={() => changeQuantity(product, 1)}>
                         +
                       </button>
                     </div>
@@ -743,9 +756,9 @@ function Cart({
                   </small>
                 </div>
                 <div className="stepper">
-                  <button onClick={() => onChange(item, -1)}>−</button>
+                  <button type="button" aria-label={`Decrease quantity for ${item.name}`} onClick={() => onChange(item, -1)}>−</button>
                   <span>{item.quantity}</span>
-                  <button onClick={() => onChange(item, 1)}>+</button>
+                  <button type="button" aria-label={`Increase quantity for ${item.name}`} onClick={() => onChange(item, 1)}>+</button>
                 </div>
                 <strong>{money(item.price * item.quantity)}</strong>
               </div>
