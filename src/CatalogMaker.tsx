@@ -357,20 +357,11 @@ export default function CatalogMaker({
           Photo upload token
           <input
             type="password"
+            name="photo-upload-token"
             autoComplete="off"
             value={uploadToken}
             onChange={(event) => setUploadToken(event.target.value)}
-            placeholder="Ask the site administrator"
-          />
-        </label>
-        <label>
-          Upload authorization token
-          <input
-            type="password"
-            autoComplete="off"
-            value={uploadToken}
-            onChange={(event) => setUploadToken(event.target.value)}
-            placeholder="Set by the site administrator"
+            placeholder="Enter the server token"
           />
         </label>
         <p>{Object.keys(photos).length} of {crackerCatalog.length} photos added</p>

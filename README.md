@@ -47,7 +47,16 @@ export PORT=4173
 npm start
 ```
 
-Keep the token private in your process manager (for example, a systemd service environment file); the example above generates a new token when run and is suitable for a manual test. Do not put it in frontend code or expose port 4173 publicly. Put Nginx in front of the app and proxy requests to `127.0.0.1:4173`; expose ports 80/443 only. Keep `PHOTO_STORAGE_DIR` on persistent server storage, and back it up.
+Keep the token private in your process manager; the example above generates a new token and is suitable for a manual test. For a persistent systemd deployment on the provided Ubuntu EC2 layout, install the included service:
+
+```sh
+sudo cp deploy/slv-crackers.service /etc/systemd/system/slv-crackers.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now slv-crackers
+sudo systemctl status slv-crackers
+```
+
+Restart it after a new build with `sudo systemctl restart slv-crackers`; inspect logs with `sudo journalctl -u slv-crackers -f`. Keep the token private, do not put it in frontend code, and do not expose port 4173 publicly. Put Nginx in front of the app and proxy requests to `127.0.0.1:4173`; expose ports 80/443 only. Keep `PHOTO_STORAGE_DIR` on persistent server storage, and back it up.
 
 For a domain, point DNS at the server and configure TLS (for example, with Certbot). Proxy the HTTPS site to Node and redirect HTTP to HTTPS:
 

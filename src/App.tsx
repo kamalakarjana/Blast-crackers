@@ -54,7 +54,7 @@ const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry" | "pdf-builder";
 const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder" })[view];
 const viewForRoute = (): View => {
-  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder" } as Record<string, View>)[window.location.hash] || "login";
+  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder" } as Record<string, View>)[window.location.hash] || "shop";
   return route === "catalogue" && localStorage.getItem("blast-admin-session") !== "true" ? "login" : route;
 };
 const downloadCartPdf = (
@@ -265,6 +265,11 @@ function App() {
             <button>English⌄</button>
             <button>⌖ Location</button>
             <button aria-label="Toggle theme">☼</button>
+            {!welcomeClaimed && (
+              <button className="header-claim" onClick={() => setWelcomeOpen(true)}>
+                Claim ₹50
+              </button>
+            )}
             <button
               className="header-cart"
               aria-label="Open cart"
