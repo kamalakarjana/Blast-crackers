@@ -16,8 +16,34 @@ type CatalogProduct = {
 
 const categories = [...new Set(crackerCatalog.map((item) => item.category))];
 const money = (price: string | null) => price ? `Rs. ${price}` : "Price not listed";
-const productsPerPage = 51;
-const pdfPageCount = Math.ceil(crackerCatalog.length / productsPerPage);
+const catalogGroups = categories.map((category) => ({
+  category,
+  items: crackerCatalog.filter((item) => item.category === category),
+}));
+const productRowHeight = 3.75;
+const categoryHeaderHeight = 4.8;
+const catalogPages = (() => {
+  let bestSplit = 1;
+  let smallestPageDifference = Number.POSITIVE_INFINITY;
+  for (let split = 1; split < catalogGroups.length; split += 1) {
+    const firstPageHeight = catalogGroups.slice(0, split).reduce(
+      (height, group) => height + categoryHeaderHeight + group.items.length * productRowHeight,
+      0,
+    );
+    const secondPageHeight = catalogGroups.slice(split).reduce(
+      (height, group) => height + categoryHeaderHeight + group.items.length * productRowHeight,
+      0,
+    );
+    if (firstPageHeight > 249 || secondPageHeight > 249) continue;
+    const pageDifference = Math.abs(firstPageHeight - secondPageHeight);
+    if (pageDifference < smallestPageDifference) {
+      bestSplit = split;
+      smallestPageDifference = pageDifference;
+    }
+  }
+  return [catalogGroups.slice(0, bestSplit), catalogGroups.slice(bestSplit)];
+})();
+const pdfPageCount = catalogPages.length;
 
 function normalizeLabel(value: string) {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
@@ -87,15 +113,15 @@ async function preparePhoto(file: File): Promise<ProductPhoto> {
   }
 }
 
-function downloadCatalog(photos: Record<number, ProductPhoto>) {
+function downloadCatalog() {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 7;
-  const columnWidths = [9, 16, 53, 84, 34];
-  const rowHeight = 4.75;
+  const columnWidths = [14, 142, 40];
   const tableHeaderY = 31;
-  const contentTop = 38;
+  const tableHeaderHeight = 6;
+  const contentTop = tableHeaderY + tableHeaderHeight;
   const columnX = columnWidths.reduce<number[]>((positions, width) => {
     positions.push((positions.at(-1) ?? margin) + width);
     return positions;
@@ -113,66 +139,60 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
     pdf.text("BRIGHT CELEBRATIONS | GREAT PRICES", margin, 16);
     pdf.setTextColor(47, 39, 57);
     pdf.setFontSize(8);
-    pdf.text("PRODUCT PRICE LIST - PRICES IN INDIAN RUPEES (INR)", margin, 27);
+    pdf.text("PRODUCT PRICE LIST  |  PRICES IN INDIAN RUPEES (INR)", margin, 27);
     pdf.setFillColor(54, 22, 91);
     pdf.setDrawColor(54, 22, 91);
-    pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, 7, "F");
+    pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, tableHeaderHeight, "F");
     pdf.setTextColor(255, 255, 255);
     pdf.setFont("helvetica", "bold");
-    pdf.setFontSize(6);
-    const headers = ["No.", "Photo", "Category", "Product name", "Price"];
-    headers.forEach((header, index) => {
-      pdf.text(header, columnX[index] + 1, tableHeaderY + 4.7);
-    });
+    pdf.setFontSize(7);
+    pdf.text("NO.", columnX[0] + 2, tableHeaderY + 4.1);
+    pdf.text("ITEM NAME", columnX[1] + 2, tableHeaderY + 4.1);
+    pdf.text("PRICE", columnX[2] + 2, tableHeaderY + 4.1);
   };
 
-  for (let page = 0; page < pdfPageCount; page += 1) {
+  for (let page = 0; page < catalogPages.length; page += 1) {
     if (page > 0) pdf.addPage();
     drawPageHeader();
-    const pageItems = crackerCatalog.slice(page * productsPerPage, (page + 1) * productsPerPage);
-    pageItems.forEach((item, index) => {
-      const y = contentTop + index * rowHeight;
-      const rowValues = [String(item.id), "", item.category, item.name, money(item.price)];
-      const rowBackground = index % 2 === 0 ? [250, 248, 252] : [255, 255, 255];
-      pdf.setDrawColor(207, 201, 215);
-      pdf.setLineWidth(0.15);
-      columnWidths.forEach((width, column) => {
-        pdf.setFillColor(rowBackground[0], rowBackground[1], rowBackground[2]);
-        pdf.rect(columnX[column], y, width, rowHeight, "FD");
+    let y = contentTop;
+    for (const group of catalogPages[page]) {
+      pdf.setFillColor(239, 232, 248);
+      pdf.setDrawColor(220, 210, 232);
+      pdf.setLineWidth(0.2);
+      pdf.rect(margin, y, pageWidth - margin * 2, categoryHeaderHeight, "FD");
+      pdf.setTextColor(64, 28, 96);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(7);
+      pdf.text(group.category.toUpperCase(), margin + 2, y + 3.3);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(5.5);
+      pdf.setTextColor(105, 83, 122);
+      pdf.text(`${group.items.length} ITEMS`, pageWidth - margin - 2, y + 3.3, { align: "right" });
+      y += categoryHeaderHeight;
+
+      group.items.forEach((item, index) => {
+        const rowHeight = productRowHeight;
+        const rowBackground = index % 2 === 0 ? [255, 255, 255] : [250, 248, 252];
+        const itemTextY = y + 2.6;
+        pdf.setDrawColor(222, 218, 227);
+        pdf.setLineWidth(0.12);
+        columnWidths.forEach((width, column) => {
+          pdf.setFillColor(rowBackground[0], rowBackground[1], rowBackground[2]);
+          pdf.rect(columnX[column], y, width, rowHeight, "FD");
+        });
+
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(6.5);
+        pdf.setTextColor(120, 112, 128);
+        pdf.text(String(item.id), columnX[0] + 2, itemTextY);
+        pdf.setTextColor(42, 31, 57);
+        pdf.text(item.name, columnX[1] + 2, itemTextY, { maxWidth: columnWidths[1] - 4 });
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(64, 28, 96);
+        pdf.text(money(item.price), columnX[2] + 2, itemTextY, { maxWidth: columnWidths[2] - 4 });
+        y += rowHeight;
       });
-
-      const photo = photos[item.id];
-      if (photo) {
-        const dimensions = pdf.getImageProperties(photo.data);
-        const imageBox = 3.8;
-        const scale = Math.min(imageBox / dimensions.width, imageBox / dimensions.height);
-        const imageWidth = dimensions.width * scale;
-        const imageHeight = dimensions.height * scale;
-        pdf.addImage(
-          photo.data,
-          "JPEG",
-          columnX[1] + 1 + (imageBox - imageWidth) / 2,
-          y + (rowHeight - imageHeight) / 2,
-          imageWidth,
-          imageHeight,
-        );
-      }
-
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(6);
-      pdf.setTextColor(42, 31, 57);
-      pdf.text(rowValues[0], columnX[0] + 1, y + 3.2, { maxWidth: columnWidths[0] - 2 });
-      pdf.setTextColor(115, 47, 174);
-      pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(5.2);
-      pdf.text(rowValues[2].toUpperCase(), columnX[2] + 1, y + 3.2, { maxWidth: columnWidths[2] - 2 });
-      pdf.setTextColor(42, 31, 57);
-      pdf.setFont("helvetica", "normal");
-      pdf.setFontSize(6);
-      pdf.text(rowValues[3], columnX[3] + 1, y + 3.2, { maxWidth: columnWidths[3] - 2 });
-      pdf.setFont("helvetica", "bold");
-      pdf.text(rowValues[4], columnX[4] + 1, y + 3.2, { maxWidth: columnWidths[4] - 2 });
-    });
+    }
   }
 
   const generatedPageCount = pdf.getNumberOfPages();
@@ -185,7 +205,7 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
     pdf.setFontSize(6);
     pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${generatedPageCount}`, pageWidth - margin, pageHeight - 3, { align: "right" });
   }
-  pdf.save("SLV_Crackers_Illustrated_Price_List.pdf");
+  pdf.save("SLV_Crackers_Category_Price_List.pdf");
 }
 
 export default function CatalogMaker({
@@ -327,7 +347,7 @@ export default function CatalogMaker({
     try {
       setIsDownloading(true);
       setError("");
-      downloadCatalog(photos);
+      downloadCatalog();
     } catch (cause) {
       setError(cause instanceof Error ? `PDF could not be created: ${cause.message}` : "PDF could not be created.");
     } finally {
@@ -450,9 +470,9 @@ export default function CatalogMaker({
       </section>
 
       <div className="catalog-maker-bottom">
-        <span>{crackerCatalog.length} products will be included in the {pdfPageCount}-page PDF.</span>
+        <span>{crackerCatalog.length} products will be arranged by category in the {pdfPageCount}-page PDF.</span>
         <button className="catalog-download" type="button" onClick={handleDownload} disabled={isDownloading}>
-          {isDownloading ? "Preparing PDF..." : "Download illustrated price list"}
+          {isDownloading ? "Preparing PDF..." : "Download category price list"}
         </button>
       </div>
     </main>
