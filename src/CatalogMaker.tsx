@@ -91,14 +91,15 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 8;
-  const columns = 3;
-  const gap = 2;
-  const contentWidth = pageWidth - margin * 2;
-  const cardWidth = (contentWidth - gap * (columns - 1)) / columns;
-  const cardHeight = 14.5;
-  const rowGap = 0.7;
-  const contentTop = 25;
+  const margin = 7;
+  const columnWidths = [9, 16, 53, 84, 34];
+  const rowHeight = 4.75;
+  const tableHeaderY = 31;
+  const contentTop = 38;
+  const columnX = columnWidths.reduce<number[]>((positions, width) => {
+    positions.push((positions.at(-1) ?? margin) + width);
+    return positions;
+  }, [margin]);
 
   const drawPageHeader = () => {
     pdf.setFillColor(54, 22, 91);
@@ -111,8 +112,18 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
     pdf.setFontSize(7);
     pdf.text("BRIGHT CELEBRATIONS | GREAT PRICES", margin, 16);
     pdf.setTextColor(47, 39, 57);
-    pdf.setFontSize(7);
-    pdf.text("ILLUSTRATED PRICE LIST - PRICES IN INDIAN RUPEES (INR)", margin, 26);
+    pdf.setFontSize(8);
+    pdf.text("PRODUCT PRICE LIST - PRICES IN INDIAN RUPEES (INR)", margin, 27);
+    pdf.setFillColor(54, 22, 91);
+    pdf.setDrawColor(54, 22, 91);
+    pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, 7, "F");
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(6);
+    const headers = ["No.", "Photo", "Category", "Product name", "Price"];
+    headers.forEach((header, index) => {
+      pdf.text(header, columnX[index] + 1, tableHeaderY + 4.7);
+    });
   };
 
   for (let page = 0; page < pdfPageCount; page += 1) {
@@ -120,51 +131,47 @@ function downloadCatalog(photos: Record<number, ProductPhoto>) {
     drawPageHeader();
     const pageItems = crackerCatalog.slice(page * productsPerPage, (page + 1) * productsPerPage);
     pageItems.forEach((item, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x = margin + column * (cardWidth + gap);
-      const y = contentTop + row * (cardHeight + rowGap);
+      const y = contentTop + index * rowHeight;
+      const rowValues = [String(item.id), "", item.category, item.name, money(item.price)];
+      const rowBackground = index % 2 === 0 ? [250, 248, 252] : [255, 255, 255];
+      pdf.setDrawColor(207, 201, 215);
+      pdf.setLineWidth(0.15);
+      columnWidths.forEach((width, column) => {
+        pdf.setFillColor(rowBackground[0], rowBackground[1], rowBackground[2]);
+        pdf.rect(columnX[column], y, width, rowHeight, "FD");
+      });
 
-      pdf.setDrawColor(226, 220, 233);
-      pdf.setFillColor(250, 248, 252);
-      pdf.roundedRect(x, y, cardWidth, cardHeight, 1.2, 1.2, "FD");
-      const imageBox = 11;
       const photo = photos[item.id];
       if (photo) {
         const dimensions = pdf.getImageProperties(photo.data);
+        const imageBox = 3.8;
         const scale = Math.min(imageBox / dimensions.width, imageBox / dimensions.height);
         const imageWidth = dimensions.width * scale;
         const imageHeight = dimensions.height * scale;
         pdf.addImage(
           photo.data,
           "JPEG",
-          x + 1.5 + (imageBox - imageWidth) / 2,
-          y + (cardHeight - imageHeight) / 2,
+          columnX[1] + 1 + (imageBox - imageWidth) / 2,
+          y + (rowHeight - imageHeight) / 2,
           imageWidth,
           imageHeight,
         );
-      } else {
-        pdf.setFillColor(238, 235, 242);
-        pdf.roundedRect(x + 1.5, y + (cardHeight - imageBox) / 2, imageBox, imageBox, 1, 1, "F");
-        pdf.setTextColor(112, 105, 120);
-        pdf.setFont("helvetica", "normal");
-        pdf.setFontSize(5);
-        pdf.text("NO PHOTO", x + 1.5 + imageBox / 2, y + 8, { align: "center" });
       }
 
-      const textX = x + 14.5;
-      const textWidth = cardWidth - 16;
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(6);
+      pdf.setTextColor(42, 31, 57);
+      pdf.text(rowValues[0], columnX[0] + 1, y + 3.2, { maxWidth: columnWidths[0] - 2 });
       pdf.setTextColor(115, 47, 174);
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(4.2);
-      pdf.text(item.category.toUpperCase(), textX, y + 3, { maxWidth: textWidth });
+      pdf.setFontSize(5.2);
+      pdf.text(rowValues[2].toUpperCase(), columnX[2] + 1, y + 3.2, { maxWidth: columnWidths[2] - 2 });
       pdf.setTextColor(42, 31, 57);
-      pdf.setFontSize(5.5);
-      const nameLines = pdf.splitTextToSize(item.name, textWidth).slice(0, 2);
-      pdf.text(nameLines, textX, y + 6);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(6);
+      pdf.text(rowValues[3], columnX[3] + 1, y + 3.2, { maxWidth: columnWidths[3] - 2 });
       pdf.setFont("helvetica", "bold");
-      pdf.setFontSize(5.5);
-      pdf.text(money(item.price), textX, y + 13, { maxWidth: textWidth });
+      pdf.text(rowValues[4], columnX[4] + 1, y + 3.2, { maxWidth: columnWidths[4] - 2 });
     });
   }
 
