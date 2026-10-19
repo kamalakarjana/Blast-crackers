@@ -48,7 +48,7 @@
 
 .catalog-maker-tools {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(190px, .7fr) auto auto;
+  grid-template-columns: minmax(200px, 1fr) minmax(190px, .7fr) minmax(190px, .7fr) auto auto;
   align-items: end;
   gap: 16px;
   padding: 18px;

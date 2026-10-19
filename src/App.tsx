@@ -134,13 +134,31 @@ function App() {
   useEffect(() => {
     try {
       localStorage.setItem("blast-products", JSON.stringify(products));
-      setProductStorageError("");
     } catch {
       setProductStorageError("This browser could not save the product photo. Free up browser storage and try again.");
     }
   }, [products]);
   useEffect(() => {
-    localStorage.setItem("blast-categories", JSON.stringify(categories));
+    let cancelled = false;
+    void fetch("/api/product-images")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Saved product photos could not be loaded from the server.");
+        return response.json() as Promise<Record<string, string | null>>;
+      })
+      .then((manifest) => {
+        if (cancelled) return;
+        setProducts((current) => current.map((product) => {
+          if (!Object.hasOwn(manifest, String(product.id))) return product;
+          const image = manifest[String(product.id)];
+          return { ...product, image: image ?? seed[product.id - 1]?.image ?? product.image };
+        }));
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setProductStorageError(cause instanceof Error ? cause.message : "Saved product photos could not be loaded from the server.");
+        }
+      });
+    return () => { cancelled = true; };
   }, []);
   useEffect(() => {
     localStorage.setItem("blast-offers", JSON.stringify(offers));
@@ -402,6 +420,7 @@ function App() {
           products={products}
           storageError={productStorageError}
           onProductImageChange={(productId, image) => {
+            setProductStorageError("");
             const fallbackImage = seed.find((product) => product.id === productId)?.image ?? "";
             setProducts((current) =>
               current.map((product) =>

@@ -15,7 +15,7 @@ function productImageWriter(): Plugin {
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
-        if (url.pathname !== '/__save-product-image') {
+        if (url.pathname !== '/api/product-images') {
           next();
           return;
         }
@@ -25,8 +25,27 @@ function productImageWriter(): Plugin {
           response.end(JSON.stringify(payload));
         };
 
+        const root = server.config.root;
+        const imageDirectory = resolve(root, 'public', 'product-images');
+        const manifestPath = resolve(root, 'src', 'productImages.json');
+
+        if (request.method === 'GET') {
+          void readFile(manifestPath, 'utf8')
+            .then((contents) => sendJson(200, JSON.parse(contents)))
+            .catch((error: NodeJS.ErrnoException) => {
+              if (error.code === 'ENOENT') sendJson(200, {});
+              else {
+                server.config.logger.error('Product photo manifest could not be read.', {
+                  error: error instanceof Error ? error : new Error(String(error)),
+                });
+                sendJson(500, { error: 'Saved product photos could not be loaded.' });
+              }
+            });
+          return;
+        }
+
         if (request.method !== 'POST' && request.method !== 'DELETE') {
-          sendJson(405, { error: 'Use POST to save or DELETE to remove a product photo.' });
+          sendJson(405, { error: 'Use GET to list, POST to save, or DELETE to remove product photos.' });
           return;
         }
 
@@ -40,17 +59,22 @@ function productImageWriter(): Plugin {
           return;
         }
 
-        let body = '';
+        const chunks: Buffer[] = [];
+        let bodyBytes = 0;
+        let tooLarge = false;
         request.setEncoding('utf8');
         request.on('data', (chunk: string) => {
-          body += chunk;
-          if (Buffer.byteLength(body) > maxUploadBytes) {
-            sendJson(413, { error: 'Image upload is too large.' });
-            request.destroy();
-          }
+          bodyBytes += Buffer.byteLength(chunk);
+          if (bodyBytes > maxUploadBytes) tooLarge = true;
+          else chunks.push(Buffer.from(chunk));
         });
         request.on('end', async () => {
+          if (tooLarge) {
+            sendJson(413, { error: 'Image upload is too large.' });
+            return;
+          }
           try {
+            const body = Buffer.concat(chunks).toString('utf8');
             const payload: { productId?: number; data?: string } = body ? JSON.parse(body) : {};
             const productId = Number(payload.productId ?? url.searchParams.get('productId'));
             if (!Number.isInteger(productId) || productId < 1 || productId > maxProductId) {
@@ -58,10 +82,7 @@ function productImageWriter(): Plugin {
               return;
             }
 
-            const root = server.config.root;
-            const imageDirectory = resolve(root, 'public', 'product-images');
             const imagePath = resolve(imageDirectory, `${productId}.jpg`);
-            const manifestPath = resolve(root, 'src', 'productImages.json');
             let manifest: Record<string, string> = {};
             try {
               manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, string>;

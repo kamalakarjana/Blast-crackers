@@ -23,26 +23,32 @@ function normalizeLabel(value: string) {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-async function saveProjectPhoto(productId: number, photo: ProductPhoto): Promise<string> {
-  const response = await fetch("/__save-product-image", {
+async function saveProjectPhoto(productId: number, photo: ProductPhoto, uploadToken: string): Promise<string> {
+  const response = await fetch("/api/product-images", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {}),
+    },
     body: JSON.stringify({ productId, data: photo.data }),
   });
   if (!response.headers.get("content-type")?.includes("application/json")) {
-    throw new Error("Project photo saving works only when running npm run dev from the project directory.");
+    throw new Error("Photo upload is unavailable on this server. Configure the production image API or run the Vite development server.");
   }
   const result = await response.json() as { image?: string; error?: string };
   if (!response.ok || !result.image) {
-    throw new Error(result.error || "Photo could not be saved into the project.");
+    throw new Error(result.error || "Photo could not be saved.");
   }
   return result.image;
 }
 
-async function removeProjectPhoto(productId: number) {
-  const response = await fetch(`/__save-product-image?productId=${productId}`, { method: "DELETE" });
+async function removeProjectPhoto(productId: number, uploadToken: string) {
+  const response = await fetch(`/api/product-images?productId=${productId}`, {
+    method: "DELETE",
+    headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
+  });
   if (!response.headers.get("content-type")?.includes("application/json")) {
-    throw new Error("Project photo removal works only when running npm run dev from the project directory.");
+    throw new Error("Photo removal is unavailable on this server. Configure the production image API or run the Vite development server.");
   }
   const result = await response.json() as { error?: string };
   if (!response.ok) {
@@ -192,6 +198,7 @@ export default function CatalogMaker({
   );
   const [selectedCategory, setSelectedCategory] = useState("All categories");
   const [search, setSearch] = useState("");
+  const [uploadToken, setUploadToken] = useState("");
   const [error, setError] = useState("");
   const [importStatus, setImportStatus] = useState("");
   const [isImporting, setIsImporting] = useState(false);
@@ -235,7 +242,7 @@ export default function CatalogMaker({
   const attachPhoto = async (itemId: number, file: File) => {
     try {
       const photo = await preparePhoto(file);
-      const imageUrl = await saveProjectPhoto(itemId, photo);
+      const imageUrl = await saveProjectPhoto(itemId, photo, uploadToken);
       setPhotos((current) => ({ ...current, [itemId]: photo }));
       onProductImageChange(itemId, imageUrl);
       setError("");
@@ -283,7 +290,7 @@ export default function CatalogMaker({
 
         try {
           const photo = await preparePhoto(file);
-          const imageUrl = await saveProjectPhoto(item.id, photo);
+          const imageUrl = await saveProjectPhoto(item.id, photo, uploadToken);
           imported[item.id] = photo;
           onProductImageChange(item.id, imageUrl);
           claimedItems.add(item.id);
@@ -326,7 +333,7 @@ export default function CatalogMaker({
         <div>
           <p className="catalog-maker-kicker">SLV CRACKERS / PDF BUILDER</p>
           <h1>Create your illustrated price list</h1>
-          <p>When running locally with npm run dev, photos save under public/product-images and appear on the website. Commit the saved images and productImages.json to publish them.</p>
+          <p>Upload photos here to save them on the production server. They will appear on the website and price-list PDF for every visitor.</p>
         </div>
         <button className="catalog-download" type="button" onClick={handleDownload} disabled={isDownloading}>
           {isDownloading ? "Preparing PDF..." : "Download PDF"}
@@ -345,6 +352,26 @@ export default function CatalogMaker({
             <option>All categories</option>
             {categories.map((category) => <option key={category}>{category}</option>)}
           </select>
+        </label>
+        <label>
+          Photo upload token
+          <input
+            type="password"
+            autoComplete="off"
+            value={uploadToken}
+            onChange={(event) => setUploadToken(event.target.value)}
+            placeholder="Ask the site administrator"
+          />
+        </label>
+        <label>
+          Upload authorization token
+          <input
+            type="password"
+            autoComplete="off"
+            value={uploadToken}
+            onChange={(event) => setUploadToken(event.target.value)}
+            placeholder="Set by the site administrator"
+          />
         </label>
         <p>{Object.keys(photos).length} of {crackerCatalog.length} photos added</p>
         <label className="catalog-folder-button">
@@ -401,7 +428,7 @@ export default function CatalogMaker({
                   type="button"
                   onClick={async () => {
                     try {
-                      await removeProjectPhoto(item.id);
+                      await removeProjectPhoto(item.id, uploadToken);
                       setPhotos((current) => {
                         const next = { ...current };
                         delete next[item.id];
