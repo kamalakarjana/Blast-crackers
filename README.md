@@ -82,8 +82,10 @@ server {
 }
 ```
 
-If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173/#/pdf-builder`. This encrypted tunnel is accepted for photo uploads. Do not enter the token on a public HTTP page.
+If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo and reward administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration. Do not enter the token on a public HTTP page.
 
-Open **PDF Catalog**, enter the server's `PHOTO_UPLOAD_TOKEN` in **Photo upload token**, and use **Add photo** beside each item. The production server saves photos under `PHOTO_STORAGE_DIR/product-images/`, makes them available to all visitors, and keeps them across app rebuilds. The API token is required to add or remove photos; viewing the site and its photos is public.
+Open **PDF Catalog** to add, replace, or remove product photos by category. In the admin dashboard, use **Manage category photos** for the same controls and edit the stacked shopping reward tiers. Enter the server's `PHOTO_UPLOAD_TOKEN` when saving changes. Product photos and reward tiers are stored under `PHOTO_STORAGE_DIR` and persist across app rebuilds. Viewing the site, product photos, and rewards is public; changing photos and rewards requires the token.
 
-The illustrated PDF includes all 102 products in a compact four-page landscape layout. Products without an uploaded photo show a placeholder.
+The downloadable portrait PDF groups the catalog into category headings and item/price tables across two pages. The Family Packs category includes the 45-Item Pack.
+
+Shopping reward tiers stack: the configured ₹1,000, ₹2,000, ₹3,000, ₹4,000, ₹5,000, and ₹10,000 targets give the listed candle and cracker gift values, with a 5K Wala Crackers bonus at ₹10,000. Shoppers see their progress toward the next target on the storefront and in the cart. Admins can edit, add, remove, or disable tiers; public reward changes are written to `PHOTO_STORAGE_DIR/rewardTiers.json`.

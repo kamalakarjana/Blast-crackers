@@ -120,3 +120,32 @@
 .offer-admin-note { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 @media (max-width: 820px) { .offer-cards { grid-template-columns: 1fr; }.offer-editor-grid { grid-template-columns: 1fr 1fr; }.offer-description { grid-column: 1 / -1; } }
 @media (max-width: 520px) { .offers-page { padding: 30px 18px 60px; }.offers-page h1 { font-size: 32px; }.offer-editor-grid { grid-template-columns: 1fr; }.offer-description { grid-column: auto; } }
+.reward-progress { margin: 14px 0 20px; padding: 16px 18px; border: 1px solid #d7eadb; border-radius: 10px; background: linear-gradient(110deg, #f4fbf5, #fffdf7); box-shadow: 0 4px 14px #183a2410; }
+.reward-progress-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: #174d37; }
+.reward-progress-heading strong { font-size: 15px; }
+.reward-progress-heading span, .reward-next-benefit, .reward-earned { color: #63756b; font-size: 13px; }
+.reward-progress-track { height: 8px; margin-top: 12px; overflow: hidden; border-radius: 99px; background: #e4e9dc; }
+.reward-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #168153, #c99d43); transition: width .2s ease; }
+.reward-next-benefit { margin: 8px 0 0; color: #825f19; font-weight: 700; }
+.reward-earned { margin: 7px 0 0; color: #26704c; }
+.reward-api-error { padding: 10px 12px; border: 1px solid #e8c2ae; border-radius: 6px; background: #fff8f4; color: #9a4d2e; font-size: 13px; }
+.reward-summary-line { color: #26704c; font-size: 13px; }
+.reward-tier-card { border-top-color: #c99d43; }
+.reward-tier-card .offer-card-mark { background: #f7f0df; color: #6f5017; font-size: 17px; }
+.reward-tier-manager { border-top: 3px solid #188153; }
+.reward-tier-manager > .offer-admin-note { max-width: 800px; line-height: 1.5; }
+.reward-tier-table { overflow-x: auto; }
+.reward-tier-table-head, .reward-tier-editor-row { display: grid; grid-template-columns: 64px 1fr 1fr 1fr 1.4fr 80px; align-items: center; gap: 10px; min-width: 690px; }
+.reward-tier-table-head { padding: 10px 8px; background: #f2f7f1; color: #405c4b; font-size: 11px; font-weight: 800; }
+.reward-tier-editor-row { padding: 8px; border-bottom: 1px solid #e8ece6; }
+.reward-tier-editor-row label { min-width: 0; }
+.reward-tier-editor-row input:not([type="checkbox"]) { width: 100%; min-width: 0; border: 1px solid #d6dfe9; border-radius: 4px; padding: 8px; }
+.reward-tier-editor-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #188153; }
+.reward-tier-editor-row .catalog-remove-photo { padding: 7px 9px; }
+.reward-tier-admin-actions { display: flex; align-items: end; gap: 12px; margin-top: 16px; }
+.reward-tier-admin-actions .save-product { flex: 0 0 auto; }
+.reward-tier-admin-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.reward-token-label { display: grid; flex: 1; gap: 6px; color: #556479; font-size: 11px; font-weight: 700; }
+.reward-token-label input { min-width: 180px; min-height: 40px; border: 1px solid #d6dfe9; border-radius: 4px; padding: 9px 10px; font: inherit; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+@media (max-width: 720px) { .reward-progress-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.reward-tier-admin-actions { align-items: stretch; flex-direction: column; }.reward-tier-admin-actions .save-product { width: 100%; }.reward-token-label input { width: 100%; }.admin-actions { flex-wrap: wrap; } }

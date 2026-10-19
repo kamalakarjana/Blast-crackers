@@ -3,6 +3,7 @@ import { jsPDF } from "jspdf";
 import CatalogMaker from "./CatalogMaker";
 import { crackerCatalog } from "./crackerCatalog";
 import productImages from "./productImages.json";
+import { initialRewardTiers, isRewardTierList, type RewardTier } from "./rewardTiers";
 import "./App.css";
 
 const productImagePaths = productImages as Record<string, string>;
@@ -36,10 +37,16 @@ const seed: Product[] = crackerCatalog.map((item, index) => ({
   image: productImagePaths[String(index + 1)] ?? "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
 }));
 const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
+const migrateFamilyPack = <T extends Product>(product: T): T =>
+  product.id === 100 && product.category === "Family Packs" && product.name === "40-Item Pack"
+    ? { ...product, name: "45-Item Pack" }
+    : product;
 const getInitialProducts = () => {
   const saved = readStorage<Product[]>("blast-products", []);
   const pdfCategories = new Set(defaultCategories);
-  const savedPdfProducts = saved.filter((product) => pdfCategories.has(product.category));
+  const savedPdfProducts = saved
+    .filter((product) => pdfCategories.has(product.category))
+    .map(migrateFamilyPack);
   const savedById = new Map(savedPdfProducts.map((product) => [product.id, product]));
   return [
     ...seed.map((product) => savedById.get(product.id) ?? product),
@@ -51,6 +58,15 @@ const defaultOffers: Offer[] = [
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, firstOrderOnly: false, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+const getEarnedRewards = (tiers: RewardTier[], subtotal: number) =>
+  tiers
+    .filter((tier) => tier.enabled && tier.threshold <= subtotal)
+    .sort((left, right) => left.threshold - right.threshold);
+const rewardCopy = (tier: RewardTier) => [
+  tier.candleValue > 0 ? `₹${tier.candleValue} candle gift` : "",
+  tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
+  tier.bonusPack,
+].filter(Boolean).join(" + ");
 type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry" | "pdf-builder";
 const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder" })[view];
 const viewForRoute = (): View => {
@@ -113,10 +129,12 @@ function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [productStorageError, setProductStorageError] = useState("");
   const [cart, setCart] = useState<CartItem[]>(() =>
-    readStorage<CartItem[]>("blast-cart", []),
+    readStorage<CartItem[]>("blast-cart", []).map(migrateFamilyPack),
   );
   const categories = defaultCategories;
   const [offers, setOffers] = useState<Offer[]>(() => readStorage<Offer[]>("blast-offers", defaultOffers));
+  const [rewardTiers, setRewardTiers] = useState<RewardTier[]>(initialRewardTiers);
+  const [rewardTiersError, setRewardTiersError] = useState("");
   const [orderCount, setOrderCount] = useState(() => readStorage<number>("blast-order-count", 0));
   const [category, setCategory] = useState(() => {
     return defaultCategories.includes("Sparklers") ? "Sparklers" : defaultCategories[0] || "";
@@ -150,12 +168,34 @@ function App() {
         setProducts((current) => current.map((product) => {
           if (!Object.hasOwn(manifest, String(product.id))) return product;
           const image = manifest[String(product.id)];
-          return { ...product, image: image ?? seed[product.id - 1]?.image ?? product.image };
+          return { ...product, image: image ?? "" };
         }));
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
           setProductStorageError(cause instanceof Error ? cause.message : "Saved product photos could not be loaded from the server.");
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/reward-tiers")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Purchase reward offers could not be loaded.");
+        const value: unknown = await response.json();
+        if (!isRewardTierList(value)) throw new Error("Purchase reward offers from the server are invalid.");
+        return value;
+      })
+      .then((tiers) => {
+        if (!cancelled) {
+          setRewardTiers(tiers);
+          setRewardTiersError("");
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setRewardTiersError(cause instanceof Error ? cause.message : "Purchase reward offers could not be loaded.");
         }
       });
     return () => { cancelled = true; };
@@ -178,6 +218,13 @@ function App() {
   const activeOffer = offers.find((item) => item.enabled && subtotal >= item.threshold && (item.firstOrderOnly ? orderCount === 0 && welcomeClaimed : orderCount > 0));
   const welcomeBonus = activeOffer?.id === "first-order" ? 50 : 0;
   const total = Math.max(0, subtotal - (activeOffer?.discount || 0) - welcomeBonus);
+  const earnedRewardTiers = getEarnedRewards(rewardTiers, subtotal);
+  const rewardCandleValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.candleValue, 0);
+  const rewardCrackerValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.crackerValue, 0);
+  const rewardBonusPacks = [...new Set(earnedRewardTiers.map((tier) => tier.bonusPack).filter(Boolean))];
+  const nextRewardTier = rewardTiers
+    .filter((tier) => tier.enabled && tier.threshold > subtotal)
+    .sort((left, right) => left.threshold - right.threshold)[0];
   const count = cart.reduce((sum, item) => sum + item.quantity, 0);
   const changeQuantity = (product: Product, delta: number) =>
     setCart((items) => {
@@ -343,6 +390,14 @@ function App() {
                 Cart ({count})
               </button>
             </div>
+            {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
+            <RewardProgress
+              subtotal={subtotal}
+              earnedCandleValue={rewardCandleValue}
+              earnedCrackerValue={rewardCrackerValue}
+              earnedBonusPacks={rewardBonusPacks}
+              nextTier={nextRewardTier}
+            />
             <div className="table-wrap">
               <div className="table-title">
                 <span>✺</span>
@@ -408,6 +463,8 @@ function App() {
           total={total}
           offer={activeOffer}
           welcomeBonus={welcomeBonus}
+          rewardTiers={rewardTiers}
+          rewardTiersError={rewardTiersError}
           count={count}
           onChange={changeQuantity}
           onBack={() => setShopView()}
@@ -416,7 +473,7 @@ function App() {
           onCheckout={startPayment}
         />
       )}
-      {view === "offers" && <OffersPage offers={offers} onBack={() => setShopView()} />}
+      {view === "offers" && <OffersPage offers={offers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
       {view === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); navigate("cart"); }} onCart={() => navigate("cart")} />
       )}
@@ -426,11 +483,10 @@ function App() {
           storageError={productStorageError}
           onProductImageChange={(productId, image) => {
             setProductStorageError("");
-            const fallbackImage = seed.find((product) => product.id === productId)?.image ?? "";
             setProducts((current) =>
               current.map((product) =>
                 product.id === productId
-                  ? { ...product, image: image ?? fallbackImage }
+                  ? { ...product, image: image ?? "" }
                   : product,
               ),
             );
@@ -444,7 +500,14 @@ function App() {
           categories={categories}
           offers={offers}
           setOffers={setOffers}
+          rewardTiers={rewardTiers}
+          rewardTiersError={rewardTiersError}
+          onSaveRewardTiers={(tiers) => {
+            setRewardTiers(tiers);
+            setRewardTiersError("");
+          }}
           onWebsite={() => setShopView()}
+          onPhotoManagement={() => navigate("pdf-builder")}
           onLogout={() => {
             localStorage.removeItem("blast-admin-session");
             navigate("login");
@@ -513,13 +576,14 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
   return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={products.length} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{Number(productId)} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{products.indexOf(item.product) + 1}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product, index) => <div className="entry-product" key={product.id}><b>#{index + 1}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
-function OffersPage({ offers, onBack }: { offers: Offer[]; onBack: () => void }) {
+function OffersPage({ offers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
   return (
     <main className="offers-page">
       <button className="back-link" onClick={onBack}>← Continue shopping</button>
       <p className="admin-kicker">SLV / OFFERS</p>
       <h1>Celebrate more, save more.</h1>
       <p className="offers-intro">Every offer is applied automatically at checkout when your order meets its condition.</p>
+      {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
       <div className="offer-cards">
         <article className="offer-card welcome-offer-card">
           <span className="offer-card-mark">₹50</span>
@@ -531,9 +595,67 @@ function OffersPage({ offers, onBack }: { offers: Offer[]; onBack: () => void })
             <div><p className="offer-card-kicker">{offer.firstOrderOnly ? "FIRST PURCHASE ONLY" : "REPEAT PURCHASES"}</p><h2>{offer.title}</h2><p>{offer.description}</p><strong>Minimum cart value: {money(offer.threshold)}</strong></div>
           </article>
         ))}
+        {rewardTiers.filter((tier) => tier.enabled).map((tier) => {
+          const included = getEarnedRewards(rewardTiers, tier.threshold);
+          const candleValue = included.reduce((sum, item) => sum + item.candleValue, 0);
+          const crackerValue = included.reduce((sum, item) => sum + item.crackerValue, 0);
+          const bonusPacks = [...new Set(included.map((item) => item.bonusPack).filter(Boolean))];
+          return (
+            <article className="offer-card reward-tier-card" key={tier.id}>
+              <span className="offer-card-mark">{money(tier.threshold)}+</span>
+              <div>
+                <p className="offer-card-kicker">STACKED SHOPPING REWARD</p>
+                <h2>Spend {money(tier.threshold)}</h2>
+                <p>
+                  Earn {candleValue > 0 ? `${money(candleValue)} worth of candles` : ""}
+                  {candleValue > 0 && crackerValue > 0 ? " + " : ""}
+                  {crackerValue > 0 ? `${money(crackerValue)} worth of crackers` : ""}
+                  {bonusPacks.length > 0 ? `${candleValue > 0 || crackerValue > 0 ? " + " : ""}${bonusPacks.join(" + ")}` : ""}.
+                  Rewards stack with every target reached.
+                </p>
+                {rewardCopy(tier) && <strong>At this target: +{rewardCopy(tier)}</strong>}
+              </div>
+            </article>
+          );
+        })}
       </div>
-      <div className="offer-rules"><h2>How it works</h2><p>1. Claim the welcome reward from the home page.</p><p>2. Add crackers until your cart reaches the displayed minimum.</p><p>3. Your eligible discount and welcome bonus appear automatically before payment.</p></div>
+      <div className="offer-rules"><h2>How the shopping rewards work</h2><p>Reach a spending target to unlock its reward. Rewards from every target you reach are added together.</p><p>Candle and cracker amounts show the value of the gift items; they are not cash discounts.</p></div>
     </main>
+  );
+}
+
+function RewardProgress({
+  subtotal,
+  earnedCandleValue,
+  earnedCrackerValue,
+  earnedBonusPacks,
+  nextTier,
+}: {
+  subtotal: number;
+  earnedCandleValue: number;
+  earnedCrackerValue: number;
+  earnedBonusPacks: string[];
+  nextTier?: RewardTier;
+}) {
+  if (subtotal <= 0 && !nextTier) return null;
+  const progress = nextTier ? Math.min(100, (subtotal / nextTier.threshold) * 100) : 100;
+  const remaining = nextTier ? Math.max(0, nextTier.threshold - subtotal) : 0;
+  const earnedRewards = [
+    earnedCandleValue > 0 ? `${money(earnedCandleValue)} worth of candles` : "",
+    earnedCrackerValue > 0 ? `${money(earnedCrackerValue)} worth of crackers` : "",
+    ...earnedBonusPacks,
+  ].filter(Boolean);
+
+  return (
+    <section className="reward-progress" aria-live="polite">
+      <div className="reward-progress-heading">
+        <strong>{nextTier ? `Next reward: ${money(nextTier.threshold)}` : "All shopping rewards unlocked"}</strong>
+        {nextTier && <span>Add {money(remaining)} more to reach your next target.</span>}
+      </div>
+      {nextTier && <div className="reward-progress-track"><span style={{ width: `${progress}%` }} /></div>}
+      {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
+      {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
+    </section>
   );
 }
 
@@ -543,6 +665,8 @@ function Cart({
   total,
   offer,
   welcomeBonus,
+  rewardTiers,
+  rewardTiersError,
   count,
   onChange,
   onBack,
@@ -555,6 +679,8 @@ function Cart({
   total: number;
   offer?: Offer;
   welcomeBonus: number;
+  rewardTiers: RewardTier[];
+  rewardTiersError: string;
   count: number;
   onChange: (product: Product, delta: number) => void;
   onBack: () => void;
@@ -562,6 +688,14 @@ function Cart({
   onLogin: () => void;
   onCheckout: () => void;
 }) {
+  const earned = getEarnedRewards(rewardTiers, subtotal);
+  const earnedCandleValue = earned.reduce((sum, tier) => sum + tier.candleValue, 0);
+  const earnedCrackerValue = earned.reduce((sum, tier) => sum + tier.crackerValue, 0);
+  const earnedBonusPacks = [...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean))];
+  const nextTier = rewardTiers
+    .filter((tier) => tier.enabled && tier.threshold > subtotal)
+    .sort((left, right) => left.threshold - right.threshold)[0];
+
   return (
     <main className="cart-page">
       <button className="back-link" onClick={onBack}>
@@ -581,6 +715,14 @@ function Cart({
       </div>
       <div className="cart-grid">
         <section>
+          {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
+          <RewardProgress
+            subtotal={subtotal}
+            earnedCandleValue={earnedCandleValue}
+            earnedCrackerValue={earnedCrackerValue}
+            earnedBonusPacks={earnedBonusPacks}
+            nextTier={nextTier}
+          />
           {cart.length === 0 ? (
             <div className="empty-cart">
               Your cart is empty.
@@ -628,6 +770,9 @@ function Cart({
           <p className="offer-note">
             {offer ? offer.description : "Check Offers for the qualifying purchase amount."}
           </p>
+          {earnedCandleValue > 0 && <p className="reward-summary-line">Candle gifts <b>{money(earnedCandleValue)} value</b></p>}
+          {earnedCrackerValue > 0 && <p className="reward-summary-line">Cracker gifts <b>{money(earnedCrackerValue)} value</b></p>}
+          {earnedBonusPacks.map((pack) => <p className="reward-summary-line" key={pack}>Bonus gift <b>{pack}</b></p>)}
           <button
             disabled={!cart.length}
             onClick={() => user ? onCheckout() : onLogin()}
@@ -814,13 +959,129 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
   );
 }
 
+function RewardTierManager({
+  tiers,
+  loadError,
+  onSave,
+}: {
+  tiers: RewardTier[];
+  loadError: string;
+  onSave: (tiers: RewardTier[]) => void;
+}) {
+  const [draftTierState, setDraftTierState] = useState({ source: tiers, draft: tiers });
+  const draftTiers = draftTierState.source === tiers ? draftTierState.draft : tiers;
+  const [uploadToken, setUploadToken] = useState("");
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const updateDraftTiers = (update: (current: RewardTier[]) => RewardTier[]) => {
+    setDraftTierState((current) => ({
+      source: tiers,
+      draft: update(current.source === tiers ? current.draft : tiers),
+    }));
+  };
+
+  const updateTier = (id: string, update: Partial<RewardTier>) => {
+    updateDraftTiers((current) => current.map((tier) => tier.id === id ? { ...tier, ...update } : tier));
+    setStatus("");
+  };
+
+  const addTier = () => {
+    const threshold = Math.max(0, ...draftTiers.map((tier) => tier.threshold)) + 1000;
+    updateDraftTiers((current) => [...current, {
+      id: `tier-${Date.now()}`,
+      threshold,
+      candleValue: 0,
+      crackerValue: 0,
+      bonusPack: "",
+      enabled: true,
+    }]);
+    setError("");
+    setStatus("");
+  };
+
+  const saveTiers = async () => {
+    const sorted = [...draftTiers].sort((left, right) => left.threshold - right.threshold);
+    if (!isRewardTierList(sorted)) {
+      setError("Use unique, increasing target amounts and valid non-negative gift values.");
+      setStatus("");
+      return;
+    }
+    if (!import.meta.env.DEV && !uploadToken.trim()) {
+      setError("Enter the server photo upload token to save public reward offers.");
+      setStatus("");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const response = await fetch("/api/reward-tiers", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...(uploadToken.trim() ? { Authorization: `Bearer ${uploadToken.trim()}` } : {}),
+        },
+        body: JSON.stringify({ tiers: sorted }),
+      });
+      const result = await response.json() as { tiers?: unknown; error?: string };
+      if (!response.ok || !isRewardTierList(result.tiers)) {
+        throw new Error(result.error || "Reward offers could not be saved.");
+      }
+      onSave(result.tiers);
+      setStatus("Reward tiers are saved and visible to shoppers.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Reward offers could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="admin-products reward-tier-manager">
+      <div className="admin-products-head">
+        <h2>Stacked shopping rewards</h2>
+        <span>Gift rewards unlock as cart value increases</span>
+      </div>
+      <p className="offer-admin-note">Each enabled tier adds its gifts to the rewards from all lower targets. Shoppers see progress while adding crackers.</p>
+      {loadError && <p className="reward-api-error" role="alert">{loadError}</p>}
+      <div className="reward-tier-table">
+        <div className="reward-tier-table-head"><span>Enabled</span><span>Cart target (₹)</span><span>Candles (₹ value)</span><span>Crackers (₹ value)</span><span>Bonus pack</span><span>Action</span></div>
+        {draftTiers.map((tier) => (
+          <div className="reward-tier-editor-row" key={tier.id}>
+            <label aria-label={`Enable ${money(tier.threshold)} reward`}><input type="checkbox" checked={tier.enabled} onChange={(event) => updateTier(tier.id, { enabled: event.target.checked })} /></label>
+            <label><span className="sr-only">Cart target</span><input type="number" min="1" step="1" value={tier.threshold} onChange={(event) => updateTier(tier.id, { threshold: Number(event.target.value) })} /></label>
+            <label><span className="sr-only">Candle gift value</span><input type="number" min="0" step="1" value={tier.candleValue} onChange={(event) => updateTier(tier.id, { candleValue: Number(event.target.value) })} /></label>
+            <label><span className="sr-only">Cracker gift value</span><input type="number" min="0" step="1" value={tier.crackerValue} onChange={(event) => updateTier(tier.id, { crackerValue: Number(event.target.value) })} /></label>
+            <label><span className="sr-only">Bonus pack</span><input value={tier.bonusPack} onChange={(event) => updateTier(tier.id, { bonusPack: event.target.value })} placeholder="Optional pack" /></label>
+            <button type="button" className="catalog-remove-photo" onClick={() => { updateDraftTiers((current) => current.filter((item) => item.id !== tier.id)); setStatus(""); }}>Delete</button>
+          </div>
+        ))}
+      </div>
+      <div className="reward-tier-admin-actions">
+        <button type="button" className="catalog-folder-button" onClick={addTier} disabled={draftTiers.length >= 30}>Add reward tier</button>
+        <label className="reward-token-label">Server photo upload token<input type="password" value={uploadToken} autoComplete="off" onChange={(event) => setUploadToken(event.target.value)} placeholder="Enter the server token" /></label>
+        <button type="button" className="save-product" onClick={() => void saveTiers()} disabled={saving}>{saving ? "Saving rewards..." : "Save shopper offers"}</button>
+      </div>
+      {error && <p className="catalog-maker-error" role="alert">{error}</p>}
+      {status && <p className="catalog-maker-status" role="status">{status}</p>}
+    </section>
+  );
+}
+
 function Catalogue({
   products,
   setProducts,
   categories,
   offers,
   setOffers,
+  rewardTiers,
+  rewardTiersError,
+  onSaveRewardTiers,
   onWebsite,
+  onPhotoManagement,
   onLogout,
 }: {
   products: Product[];
@@ -828,7 +1089,11 @@ function Catalogue({
   categories: string[];
   offers: Offer[];
   setOffers: (offers: Offer[]) => void;
+  rewardTiers: RewardTier[];
+  rewardTiersError: string;
+  onSaveRewardTiers: (tiers: RewardTier[]) => void;
   onWebsite: () => void;
+  onPhotoManagement: () => void;
   onLogout: () => void;
 }) {
   const empty: Product = {
@@ -870,6 +1135,7 @@ function Catalogue({
         </div>
         <div className="admin-actions">
           <button onClick={onWebsite}>View customer site</button>
+          <button onClick={onPhotoManagement}>Manage category photos</button>
           <button onClick={onLogout}>Sign out</button>
         </div>
       </div>
@@ -964,6 +1230,11 @@ function Catalogue({
         <div className="admin-products-head"><h2>PDF categories</h2><span>{categories.length} categories</span></div>
         {categories.map((item) => <div className="admin-category-row" key={item}><strong>{item}</strong></div>)}
       </section>
+      <RewardTierManager
+        tiers={rewardTiers}
+        loadError={rewardTiersError}
+        onSave={onSaveRewardTiers}
+      />
       <section className="admin-products offer-manager">
         <div className="admin-products-head"><h2>Offers &amp; checkout rules</h2><span>Edit the live customer offers</span></div>
         {offers.map((offer) => (

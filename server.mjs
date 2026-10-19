@@ -9,7 +9,9 @@ const builtImageDirectory = resolve(distDirectory, 'product-images');
 const storageDirectory = resolve(process.env.PHOTO_STORAGE_DIR || resolve(projectRoot, 'data'));
 const uploadDirectory = resolve(storageDirectory, 'product-images');
 const manifestPath = resolve(storageDirectory, 'productImages.json');
+const rewardTiersPath = resolve(storageDirectory, 'rewardTiers.json');
 const sourceManifestPath = resolve(projectRoot, 'src', 'productImages.json');
+const sourceRewardTiersPath = resolve(projectRoot, 'src', 'rewardTiers.json');
 const uploadToken = process.env.PHOTO_UPLOAD_TOKEN || '';
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4173);
@@ -84,6 +86,52 @@ async function writeManifest(manifest) {
   const temporaryPath = `${manifestPath}.tmp`;
   await writeFile(temporaryPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   await rename(temporaryPath, manifestPath);
+}
+
+function isRewardTierList(value) {
+  if (!Array.isArray(value) || value.length > 30) return false;
+  const ids = new Set();
+  let previousThreshold = 0;
+
+  for (const tier of value) {
+    if (!tier || typeof tier !== 'object' || Array.isArray(tier)) return false;
+    if (
+      typeof tier.id !== 'string'
+      || !/^[a-zA-Z0-9_-]{1,80}$/.test(tier.id)
+      || ids.has(tier.id)
+      || !Number.isSafeInteger(tier.threshold)
+      || tier.threshold <= previousThreshold
+      || !Number.isSafeInteger(tier.candleValue)
+      || tier.candleValue < 0
+      || !Number.isSafeInteger(tier.crackerValue)
+      || tier.crackerValue < 0
+      || typeof tier.bonusPack !== 'string'
+      || tier.bonusPack.length > 100
+      || typeof tier.enabled !== 'boolean'
+    ) return false;
+    ids.add(tier.id);
+    previousThreshold = tier.threshold;
+  }
+  return true;
+}
+
+async function getRewardTiers() {
+  let tiers;
+  try {
+    tiers = JSON.parse(await readFile(rewardTiersPath, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    tiers = JSON.parse(await readFile(sourceRewardTiersPath, 'utf8'));
+  }
+  if (!isRewardTierList(tiers)) throw new Error('Saved reward tiers are invalid.');
+  return tiers;
+}
+
+async function saveRewardTiers(tiers) {
+  await mkdir(storageDirectory, { recursive: true });
+  const temporaryPath = `${rewardTiersPath}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(tiers, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, rewardTiersPath);
 }
 
 async function readRequestBody(request) {
@@ -224,11 +272,52 @@ async function handleImageApi(request, response, url) {
   sendJson(response, 200, { image: imageUrl });
 }
 
+async function handleRewardTiersApi(request, response) {
+  if (request.method === 'GET') {
+    sendJson(response, 200, await getRewardTiers());
+    return;
+  }
+  if (request.method !== 'PUT') {
+    sendJson(response, 405, { error: 'Use GET to list or PUT to update reward tiers.' });
+    return;
+  }
+  if (!uploadToken) {
+    sendJson(response, 503, { error: 'Reward updates are not configured on this server.' });
+    return;
+  }
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Use HTTPS or an SSH tunnel to update rewards.' });
+    return;
+  }
+  if (!isAuthorized(request)) {
+    sendJson(response, 401, { error: 'Invalid photo upload token.' });
+    return;
+  }
+
+  let body;
+  try {
+    body = JSON.parse(await readRequestBody(request));
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: error.statusCode ? error.message : 'Request body must contain valid JSON.' });
+    return;
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !isRewardTierList(body.tiers)) {
+    sendJson(response, 400, { error: 'Reward tiers must be valid, uniquely ordered entries.' });
+    return;
+  }
+  await saveRewardTiers(body.tiers);
+  sendJson(response, 200, { tiers: body.tiers });
+}
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (url.pathname === '/api/product-images') {
       await handleImageApi(request, response, url);
+      return;
+    }
+    if (url.pathname === '/api/reward-tiers') {
+      await handleRewardTiersApi(request, response);
       return;
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') {

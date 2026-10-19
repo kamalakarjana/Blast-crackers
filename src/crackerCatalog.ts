@@ -132,7 +132,7 @@ const catalog: [string, [string, string | null][]][] = [
     ["26-Item Pack", "549"],
     ["30-Item Pack", "749"],
     ["36-Item Pack", "949"],
-    ["40-Item Pack", "1,249"],
+    ["45-Item Pack", "1,249"],
     ["50-Item Pack", "1,649"],
     ["60-Item Pack", "1,849"],
   ]],
