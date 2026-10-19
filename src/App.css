@@ -163,6 +163,21 @@
 .customer-row small, .customer-no-email { color: var(--muted); font-size: 11px; }
 .customer-row a { width: fit-content; color: #168153; font-size: 13px; overflow-wrap: anywhere; }
 .header-tools .customer-signout { padding: 8px 11px; border: 1px solid #d7e4da; border-radius: 6px; color: #17633b; font-size: 13px; font-weight: 700; }
+.account-page { min-height: calc(100vh - 150px); width: min(520px, calc(100% - 36px)); margin: 0 auto; padding: 42px 0; }
+.account-page .back-link { padding: 0; cursor: pointer; }
+.account-card { display: grid; gap: 14px; padding: 34px; border: 1px solid #e3e9e2; border-top: 4px solid var(--green); border-radius: 8px; background: #fff; box-shadow: 0 12px 32px #152b1710; }
+.account-card h1 { margin: 0; color: #1c3426; font: 700 32px Georgia, serif; }
+.account-card > p:not(.admin-kicker) { margin: 0 0 4px; color: #748198; font-size: 14px; line-height: 1.55; }
+.account-card > label:not(.contact-consent) { display: grid; gap: 6px; color: #435448; font-size: 12px; font-weight: 700; }
+.account-card input:not([type="checkbox"]) { width: 100%; min-height: 43px; padding: 10px 12px; border: 1px solid #d6dfe9; border-radius: 5px; font: inherit; }
+.account-submit { width: 100%; min-height: 46px; border: 0; border-radius: 5px; background: var(--green); color: #fff; font-weight: 800; }
+.account-submit:disabled { cursor: wait; opacity: .7; }
+.account-switch { border: 0; background: transparent; color: var(--green); font-size: 13px; font-weight: 700; }
+.cart-sync-error { width: min(1180px, calc(100% - 32px)); margin: 12px auto; padding: 11px 14px; border: 1px solid #e8c2ae; border-radius: 6px; background: #fff8f4; color: #9a4d2e; font-size: 13px; }
+.info-page { max-width: 800px; min-height: 60vh; margin: 0 auto; padding: 70px 24px; }
+.info-page h1 { color: #1c3426; font: 700 42px Georgia, serif; }
+.info-page > p:not(.admin-kicker) { max-width: 650px; color: #667568; font-size: 16px; line-height: 1.7; }
+.info-call-link { display: inline-block; text-decoration: none; }
 @media (max-width: 720px) { .customer-row { grid-template-columns: 1fr; gap: 7px; }.customer-load-button { width: 100%; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 @media (max-width: 720px) { .reward-progress-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.reward-tier-admin-actions { align-items: stretch; flex-direction: column; }.reward-tier-admin-actions .save-product { width: 100%; }.reward-token-label input { width: 100%; }.admin-actions { flex-wrap: wrap; } }

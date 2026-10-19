@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { jsPDF } from "jspdf";
 import CatalogMaker from "./CatalogMaker";
 import { crackerCatalog } from "./crackerCatalog";
@@ -65,8 +65,10 @@ const rewardCopy = (tier: RewardTier) => [
   tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
   tier.bonusPack,
 ].filter(Boolean).join(" + ");
-type CustomerRegistration = { name: string; phone: string; email: string; consented: boolean };
-type CustomerRecord = Omit<CustomerRegistration, "consented"> & { id: string; registeredAt: string; consentedAt: string };
+type CustomerRegistration = { name: string; phone: string; email: string; password: string; consented: boolean };
+type CustomerIdentity = { id: string; name: string; phone: string; email: string };
+type CustomerRecord = CustomerIdentity & { registeredAt: string; consentedAt: string };
+type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; email: string; password: string };
 function isCustomerRecord(value: unknown): value is CustomerRecord {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -77,22 +79,36 @@ function isCustomerRecord(value: unknown): value is CustomerRecord {
     && typeof candidate.registeredAt === "string"
     && typeof candidate.consentedAt === "string";
 }
-async function saveCustomerRegistration(customer: CustomerRegistration) {
-  const response = await fetch("/api/customers", {
+async function readApiResult<T>(response: Response): Promise<T> {
+  const result = await response.json() as T & { error?: string };
+  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  return result;
+}
+async function authenticateCustomer(input: AuthenticationInput) {
+  const response = await fetch(input.mode === "register" ? "/api/auth/register" : "/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(customer),
+    body: JSON.stringify(input.mode === "register" ? input.customer : { email: input.email, password: input.password }),
   });
-  const result = await response.json() as { saved?: boolean; error?: string };
-  if (!response.ok || !result.saved) {
-    throw new Error(result.error || "Your registration could not be saved.");
-  }
+  const result = await readApiResult<{ user: CustomerIdentity }>(response);
+  return result.user;
 }
-type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry" | "pdf-builder";
-const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder" })[view];
+async function readCustomerCart() {
+  const response = await fetch("/api/customer-cart");
+  return (await readApiResult<{ cart: CartItem[] }>(response)).cart;
+}
+async function saveCustomerCart(cart: CartItem[]) {
+  const response = await fetch("/api/customer-cart", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cart }),
+  });
+  await readApiResult<{ saved: boolean }>(response);
+}
+type View = "customer-auth" | "admin-login" | "shop" | "cart" | "catalogue" | "admin-customers" | "offers" | "order-entry" | "pdf-builder" | "about" | "contact";
+const routeForView = (view: View) => ({ "customer-auth": "#/login", "admin-login": "#/admin/login", shop: "#/", cart: "#/cart", catalogue: "#/admin", "admin-customers": "#/admin/customers", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder", about: "#/about", contact: "#/contact" })[view];
 const viewForRoute = (): View => {
-  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder" } as Record<string, View>)[window.location.hash] || "shop";
-  return route === "catalogue" && localStorage.getItem("blast-admin-session") !== "true" ? "login" : route;
+  return ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/admin": "catalogue", "#/admin/customers": "admin-customers", "#/admin/login": "admin-login", "#/offers": "offers", "#/login": "customer-auth", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder", "#/about": "about", "#/contact": "contact" } as Record<string, View>)[window.location.hash] || "shop";
 };
 const downloadCartPdf = (
   cart: CartItem[],
@@ -105,6 +121,7 @@ const downloadCartPdf = (
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const pdfMoney = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+  const pdfText = (value: string) => value.replace(/₹/g, "Rs. ");
   const margin = 10;
   const colors = {
     emerald: [18, 79, 58],
@@ -162,8 +179,8 @@ const downloadCartPdf = (
   cart.forEach((item, index) => {
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(8);
-    const productLines = pdf.splitTextToSize(item.name, columnWidths[1] - 5);
-    const packLines = pdf.splitTextToSize(item.pack, columnWidths[1] - 5);
+    const productLines = pdf.splitTextToSize(pdfText(item.name), columnWidths[1] - 5);
+    const packLines = pdf.splitTextToSize(pdfText(item.pack), columnWidths[1] - 5);
     const rowHeight = Math.max(11, productLines.length * 4 + packLines.length * 3 + 4);
     if (y + rowHeight > pageHeight - 18) startNewPage();
     const background = index % 2 === 0 ? colors.white : colors.stripe;
@@ -199,7 +216,7 @@ const downloadCartPdf = (
     { label: "Subtotal", value: pdfMoney(subtotal) },
     ...(offer ? [{ label: offer.title, value: `-${pdfMoney(offer.discount)}` }] : []),
   ];
-  const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${reward}`, pageWidth - margin * 2 - 4));
+  const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${pdfText(reward)}`, pageWidth - margin * 2 - 4));
   const rewardHeight = rewards.length ? 5 + rewardText.reduce((height, lines) => height + lines.length * 4.5, 0) : 0;
   const summaryHeight = 7 + 6 + summaryLines.length * 7 + 16 + rewardHeight;
   if (y + summaryHeight > pageHeight - 18) startNewPage();
@@ -213,7 +230,7 @@ const downloadCartPdf = (
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(8);
     pdf.setTextColor(...colors.muted as [number, number, number]);
-    pdf.text(line.label, summaryX, y);
+    pdf.text(pdfText(line.label), summaryX, y);
     pdf.setTextColor(...colors.ink as [number, number, number]);
     pdf.text(line.value, pageWidth - margin, y, { align: "right" });
     y += 7;
@@ -267,7 +284,7 @@ function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [productStorageError, setProductStorageError] = useState("");
   const [cart, setCart] = useState<CartItem[]>(() =>
-    readStorage<CartItem[]>("blast-cart", []).map(migrateFamilyPack),
+    readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", [])).map(migrateFamilyPack),
   );
   const categories = defaultCategories;
   const [offers, setOffers] = useState<Offer[]>(() => readStorage<Array<Offer & { id: string }>>("blast-offers", defaultOffers).filter((offer) => offer.id === "repeat-order"));
@@ -278,12 +295,19 @@ function App() {
     return defaultCategories.includes("Sparklers") ? "Sparklers" : defaultCategories[0] || "";
   });
   const [view, setView] = useState<View>(() => viewForRoute());
-  const [authOpen, setAuthOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
-  const [paymentAfterLogin, setPaymentAfterLogin] = useState(false);
-  const [user, setUser] = useState<string | null>(() =>
-    localStorage.getItem("blast-user"),
-  );
+  const [authReturnTo, setAuthReturnTo] = useState<View>("shop");
+  const [user, setUser] = useState<CustomerIdentity | null>(null);
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false);
+  const [authStateReady, setAuthStateReady] = useState(false);
+  const [cartReady, setCartReady] = useState(false);
+  const [cartError, setCartError] = useState("");
+  const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const queueCartSave = (nextCart: CartItem[]) => {
+    const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
+    cartSaveQueue.current = save.catch(() => undefined);
+    return save;
+  };
   useEffect(() => {
     try {
       localStorage.setItem("blast-products", JSON.stringify(products));
@@ -291,6 +315,53 @@ function App() {
       setProductStorageError("This browser could not save the product photo. Free up browser storage and try again.");
     }
   }, [products]);
+  useEffect(() => {
+    let cancelled = false;
+    const loadSessions = async () => {
+      try {
+        const [customerResponse, adminResponse] = await Promise.all([
+          fetch("/api/auth/session"),
+          fetch("/api/admin/session"),
+        ]);
+        const customerSession = await readApiResult<{ user: CustomerIdentity | null }>(customerResponse);
+        const adminSession = await readApiResult<{ authenticated: boolean }>(adminResponse);
+        if (cancelled) return;
+        setUser(customerSession.user);
+        setAdminAuthenticated(adminSession.authenticated);
+        if (customerSession.user) {
+          try {
+            const savedCart = await readCustomerCart();
+            if (cancelled) return;
+            const guestCart = readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", []));
+            const restoredCart = savedCart.length ? savedCart : guestCart;
+            if (!savedCart.length && guestCart.length) await queueCartSave(guestCart);
+            localStorage.removeItem("blast-cart");
+            localStorage.removeItem("blast-cart-guest");
+            setCart(restoredCart.map(migrateFamilyPack));
+          } catch (cause) {
+            if (cancelled) return;
+            await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+            setUser(null);
+            setCart(readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", [])).map(migrateFamilyPack));
+            setCartError(cause instanceof Error ? `Your saved account cart could not be restored. Please sign in again. ${cause.message}` : "Your saved account cart could not be restored. Please sign in again.");
+          }
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          setCartError(cause instanceof Error ? cause.message : "Your saved session could not be loaded.");
+          setUser(null);
+          setCart(readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", [])).map(migrateFamilyPack));
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthStateReady(true);
+          setCartReady(true);
+        }
+      }
+    };
+    void loadSessions();
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/product-images")
@@ -342,8 +413,18 @@ function App() {
     localStorage.setItem("blast-order-count", String(orderCount));
   }, [orderCount]);
   useEffect(() => {
-    localStorage.setItem("blast-cart", JSON.stringify(cart));
-  }, [cart]);
+    if (!cartReady) return;
+    if (!user) {
+      localStorage.setItem("blast-cart-guest", JSON.stringify(cart));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void queueCartSave(cart).then(() => setCartError("")).catch((cause: unknown) => {
+        setCartError(cause instanceof Error ? cause.message : "Your cart could not be saved to your account.");
+      });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [cart, user, cartReady]);
   const visible = products.filter((item) => item.category === category);
   const subtotal = cart.reduce(
     (sum, item) => sum + item.price * item.quantity,
@@ -390,30 +471,66 @@ function App() {
     window.addEventListener("hashchange", syncRoute);
     return () => { window.removeEventListener("popstate", syncRoute); window.removeEventListener("hashchange", syncRoute); };
   }, []);
+  useEffect(() => {
+    if (!authStateReady) return;
+    const isAdminRoute = view === "catalogue" || view === "admin-customers";
+    if (isAdminRoute && !adminAuthenticated) {
+      window.history.replaceState({}, "", routeForView("admin-login"));
+    } else if (view === "admin-login" && adminAuthenticated) {
+      window.history.replaceState({}, "", routeForView("catalogue"));
+    }
+  }, [view, adminAuthenticated, authStateReady]);
+  const isAdminView = view === "catalogue" || view === "admin-customers";
+  const renderedView: View = !authStateReady && isAdminView
+    ? "admin-login"
+    : isAdminView && !adminAuthenticated
+      ? "admin-login"
+      : view === "admin-login" && adminAuthenticated
+        ? "catalogue"
+        : view;
   const openAdmin = () => {
-    if (user) navigate("catalogue");
-    else setAuthOpen(true);
+    navigate(adminAuthenticated ? "catalogue" : "admin-login");
   };
   const startPayment = () => setPaymentOpen(true);
   const requestPaymentLogin = () => {
-    setPaymentAfterLogin(true);
-    setAuthOpen(true);
+    setAuthReturnTo("cart");
+    navigate("customer-auth");
   };
-  const registerCustomer = async (customer: CustomerRegistration) => {
-    await saveCustomerRegistration(customer);
-    setUser(customer.name);
-    localStorage.setItem("blast-user", customer.name);
-    setAuthOpen(false);
-    if (paymentAfterLogin) {
-      setPaymentAfterLogin(false);
-      setPaymentOpen(true);
+  const authenticate = async (input: AuthenticationInput) => {
+    const identity = await authenticateCustomer(input);
+    const savedCart = await readCustomerCart();
+    const guestCart = readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", []));
+    const restoredCart = savedCart.length ? savedCart : guestCart;
+    if (!savedCart.length && guestCart.length) await queueCartSave(guestCart);
+    localStorage.removeItem("blast-cart");
+    localStorage.removeItem("blast-cart-guest");
+    setCart(restoredCart.map(migrateFamilyPack));
+    setUser(identity);
+    setCartError("");
+    setCartReady(true);
+    navigate(authReturnTo);
+  };
+  const signOutCustomer = async () => {
+    try {
+      await queueCartSave(cart);
+      await readApiResult<{ signedOut: boolean }>(await fetch("/api/auth/logout", { method: "POST" }));
+      setUser(null);
+      setCart([]);
+      setPaymentOpen(false);
+      setCartError("");
+      navigate("customer-auth");
+    } catch (cause) {
+      setCartError(cause instanceof Error ? cause.message : "Sign out could not be completed.");
     }
   };
-  const signOutCustomer = () => {
-    localStorage.removeItem("blast-user");
-    setUser(null);
-    setPaymentAfterLogin(false);
-    setPaymentOpen(false);
+  const signOutAdmin = async () => {
+    try {
+      await readApiResult<{ signedOut: boolean }>(await fetch("/api/admin/logout", { method: "POST" }));
+      setAdminAuthenticated(false);
+      navigate("admin-login");
+    } catch (cause) {
+      setCartError(cause instanceof Error ? cause.message : "Admin sign out could not be completed.");
+    }
   };
   const completePurchase = () => {
     setPaymentOpen(false);
@@ -424,7 +541,7 @@ function App() {
   };
   return (
     <div className="site-shell">
-      {view !== "login" && (
+      {renderedView !== "admin-login" && (
         <header className="site-header">
           <button
             className="logo"
@@ -437,31 +554,30 @@ function App() {
           </button>
           <nav>
             <button
-              className={view === "shop" ? "nav-active" : ""}
+              className={renderedView === "shop" ? "nav-active" : ""}
               onClick={() => setShopView()}
             >
               Home
             </button>
             <button
-              className={view === "shop" ? "nav-active" : ""}
-              onClick={() => setShopView()}
+              className={renderedView === "contact" ? "nav-active" : ""}
+              onClick={() => navigate("contact")}
             >
               Quick Enquiry
             </button>
             <button onClick={() => navigate("order-entry")}>Order Entry</button>
-            <button className={view === "pdf-builder" ? "nav-active" : ""} onClick={() => navigate("pdf-builder")}>PDF Catalog</button>
+            <button className={renderedView === "pdf-builder" ? "nav-active" : ""} onClick={() => navigate("pdf-builder")}>PDF Catalog</button>
             <button onClick={() => setShopView("Sparklers")}>
               Crackers
             </button>
-            <button className={view === "offers" ? "nav-active" : ""} onClick={() => navigate("offers")}>Offers</button>
-            <button onClick={() => setShopView()}>About</button>
-            <button onClick={() => setShopView()}>Contact</button>
+            <button className={renderedView === "offers" ? "nav-active" : ""} onClick={() => navigate("offers")}>Offers</button>
+            <button className={renderedView === "about" ? "nav-active" : ""} onClick={() => navigate("about")}>About</button>
+            <button className={renderedView === "contact" ? "nav-active" : ""} onClick={() => navigate("contact")}>Contact</button>
           </nav>
           <div className="header-tools">
-            <button>English⌄</button>
-            <button>⌖ Location</button>
-            <button aria-label="Toggle theme">☼</button>
-            {user && <button className="customer-signout" type="button" onClick={signOutCustomer}>Sign out</button>}
+            {user
+              ? <button className="customer-signout" type="button" onClick={() => void signOutCustomer()}>Sign out</button>
+              : <button className="customer-signout" type="button" onClick={() => { setAuthReturnTo("shop"); navigate("customer-auth"); }}>Sign in</button>}
             <button
               className="header-cart"
               aria-label="Open cart"
@@ -472,15 +588,24 @@ function App() {
           </div>
         </header>
       )}
-      {view === "login" && (
+      {cartError && <p className="cart-sync-error" role="alert">{cartError}</p>}
+      {renderedView === "admin-login" && (
         <AdminLogin
-          onLogin={() => {
-            localStorage.setItem("blast-admin-session", "true");
+          onBack={() => navigate("shop")}
+          onLogin={async (email, password) => {
+            const response = await fetch("/api/admin/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, password }),
+            });
+            await readApiResult<{ authenticated: boolean }>(response);
+            setAdminAuthenticated(true);
             navigate("catalogue");
           }}
         />
       )}
-      {view === "shop" && (
+      {renderedView === "customer-auth" && <Auth onAuth={authenticate} onBack={() => navigate(authReturnTo)} />}
+      {renderedView === "shop" && (
         <main className="quick-order">
           <aside className="category-panel">
             <h3>CATEGORIES</h3>
@@ -614,7 +739,7 @@ function App() {
           </section>
         </main>
       )}
-      {view === "cart" && (
+      {renderedView === "cart" && (
         <Cart
           cart={cart}
           subtotal={subtotal}
@@ -625,16 +750,16 @@ function App() {
           count={count}
           onChange={changeQuantity}
           onBack={() => setShopView()}
-          user={user}
+          user={user !== null}
           onLogin={requestPaymentLogin}
           onCheckout={startPayment}
         />
       )}
-      {view === "offers" && <OffersPage offers={offers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
-      {view === "order-entry" && (
+      {renderedView === "offers" && <OffersPage offers={offers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
+      {renderedView === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); navigate("cart"); }} onCart={() => navigate("cart")} />
       )}
-      {view === "pdf-builder" && (
+      {renderedView === "pdf-builder" && (
         <CatalogMaker
           products={products}
           storageError={productStorageError}
@@ -650,7 +775,7 @@ function App() {
           }}
         />
       )}
-      {view === "catalogue" && (
+      {renderedView === "catalogue" && (
         <Catalogue
           products={products}
           setProducts={setProducts}
@@ -665,17 +790,16 @@ function App() {
           }}
           onWebsite={() => setShopView()}
           onPhotoManagement={() => navigate("pdf-builder")}
-          onLogout={() => {
-            localStorage.removeItem("blast-admin-session");
-            navigate("login");
-          }}
+          onCustomers={() => navigate("admin-customers")}
+          onLogout={() => void signOutAdmin()}
         />
       )}
-      {view !== "login" && view !== "pdf-builder" && (
+      {renderedView === "admin-customers" && <AdminCustomersPage onBack={() => navigate("catalogue")} />}
+      {renderedView === "about" && <InfoPage kind="about" onContact={() => navigate("contact")} />}
+      {renderedView === "contact" && <InfoPage kind="contact" onContact={() => navigate("contact")} />}
+      {renderedView !== "admin-login" && renderedView !== "pdf-builder" && (
         <div className="floating-actions">
-          <button className="whatsapp" aria-label="Contact SLV Crackers">
-            ☎
-          </button>
+          <a className="whatsapp" aria-label="Call SLV Crackers" href="tel:+919000488963">☎</a>
           <button
             className="floating-cart"
             onClick={() => navigate("cart")}
@@ -688,16 +812,10 @@ function App() {
       <footer>
         <span>SLV CRACKERS</span>
         <span>Safe products. Bright celebrations.</span>
-        {view !== "login" && (
+        {renderedView !== "admin-login" && (
           <button onClick={openAdmin}>Shop management</button>
         )}
       </footer>
-      {authOpen && (
-        <Auth
-          onClose={() => setAuthOpen(false)}
-          onAuth={registerCustomer}
-        />
-      )}
       {paymentOpen && <PaymentModal total={total} onClose={() => setPaymentOpen(false)} onPaid={completePurchase} />}
     </div>
   );
@@ -824,7 +942,7 @@ function Cart({
   count: number;
   onChange: (product: Product, delta: number) => void;
   onBack: () => void;
-  user: string | null;
+  user: boolean;
   onLogin: () => void;
   onCheckout: () => void;
 }) {
@@ -930,57 +1048,60 @@ function Cart({
 }
 
 function Auth({
-  onClose,
+  onBack,
   onAuth,
 }: {
-  onClose: () => void;
-  onAuth: (customer: CustomerRegistration) => Promise<void>;
+  onBack: () => void;
+  onAuth: (input: AuthenticationInput) => Promise<void>;
 }) {
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [consented, setConsented] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (mode === "register" && !consented) {
+      setError("Please agree to contact follow-up before creating an account.");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
-      await onAuth({ name, phone, email, consented });
+      await onAuth(mode === "register"
+        ? { mode, customer: { name, phone, email, password, consented } }
+        : { mode, email, password });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Your registration could not be saved.");
+      setError(cause instanceof Error ? cause.message : "Sign-in could not be completed.");
     } finally {
       setSaving(false);
     }
   };
   return (
-    <div className="modal-backdrop">
-      <form
-        className="auth-box"
-        onSubmit={(event) => void submit(event)}
-      >
-        <button type="button" className="close" onClick={onClose}>
-          ×
-        </button>
-        <h2>Register your contact details</h2>
-        <p>We’ll save these details so the SLV team can follow up about your order.</p>
-        <label>Your name<input
-          required
-          minLength={2}
-          maxLength={100}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Your name"
-        /></label>
-        <label>Mobile number<input required type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="10-digit mobile number" /></label>
-        <label>Email address<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
-        <label className="contact-consent"><input type="checkbox" required checked={consented} onChange={(event) => setConsented(event.target.checked)} />I agree that SLV Crackers may store these details and contact me about my enquiry or order.</label>
-        {!import.meta.env.DEV && <small className="contact-security-note">Contact details can be submitted only through the secure HTTPS site or a local SSH tunnel.</small>}
+    <main className="account-page">
+      <button type="button" className="back-link" onClick={onBack}>← Back to shopping</button>
+      <form className="account-card" onSubmit={(event) => void submit(event)}>
+        <p className="admin-kicker">SLV CUSTOMER ACCOUNT</p>
+        <h1>{mode === "login" ? "Sign in" : "Create your account"}</h1>
+        <p>{mode === "login" ? "Sign in to continue checkout and restore your saved cart." : "Register once to save your cart and let us follow up on your enquiry."}</p>
+        {mode === "register" && <>
+          <label>Your name<input required minLength={2} maxLength={100} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
+          <label>Mobile number<input required type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" placeholder="10-digit mobile number" /></label>
+        </>}
+        <label>Email address<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
+        <label>Password<input required type="password" minLength={mode === "register" ? 10 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} /></label>
+        {mode === "register" && <label className="contact-consent"><input type="checkbox" required checked={consented} onChange={(event) => setConsented(event.target.checked)} />I agree that SLV Crackers may store my contact details and contact me about my enquiry or order.</label>}
+        {!import.meta.env.DEV && <small className="contact-security-note">Account sign-in requires the secure HTTPS website or a local SSH tunnel.</small>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button type="submit" disabled={saving}>{saving ? "Saving details..." : "Register & continue →"}</button>
+        <button className="account-submit" type="submit" disabled={saving}>{saving ? "Please wait..." : mode === "login" ? "Sign in →" : "Create account →"}</button>
+        <button className="account-switch" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
+          {mode === "login" ? "New customer? Create an account" : "Already registered? Sign in"}
+        </button>
       </form>
-    </div>
+    </main>
   );
 }
 
@@ -1008,18 +1129,27 @@ function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () =
   );
 }
 
-function AdminLogin({ onLogin }: { onLogin: () => void }) {
+function AdminLogin({ onBack, onLogin }: { onBack: () => void; onLogin: (email: string, password: string) => Promise<void> }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const submit = (event: FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (email === "admin@slv.in" && password === "Slv@123") onLogin();
-    else setError("Incorrect admin email or password.");
+    setSaving(true);
+    setError("");
+    try {
+      await onLogin(email, password);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Admin sign-in could not be completed.");
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <main className="admin-login-page">
       <div className="admin-login-card">
+        <button type="button" className="back-link" onClick={onBack}>← Back to website</button>
         <div className="admin-login-brand">
           <span>✦</span> SLV
         </div>
@@ -1028,14 +1158,14 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
         <p className="admin-intro">
           Sign in to update your crackers, rates, and customer catalogue.
         </p>
-        <form onSubmit={submit}>
+        <form onSubmit={(event) => void submit(event)}>
           <label>
             Admin email
             <input
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-            placeholder="admin@slv.in"
+            placeholder="name@example.com"
               required
             />
           </label>
@@ -1050,9 +1180,10 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
             />
           </label>
           {error && <p className="form-error">{error}</p>}
-          <button type="submit">Sign in to dashboard →</button>
+          {!import.meta.env.DEV && <small className="contact-security-note">Admin sign-in requires HTTPS or a local SSH tunnel.</small>}
+          <button type="submit" disabled={saving}>{saving ? "Signing in..." : "Sign in to dashboard →"}</button>
         </form>
-        <p className="demo-hint">Demo access: admin@slv.in / Slv@123</p>
+        <p className="demo-hint">Use the administrator email and password configured privately on the server. Contact your site owner if you do not have them.</p>
       </div>
       <div className="admin-login-art">
         <span>SLV</span>
@@ -1077,7 +1208,6 @@ function RewardTierManager({
 }) {
   const [draftTierState, setDraftTierState] = useState({ source: tiers, draft: tiers });
   const draftTiers = draftTierState.source === tiers ? draftTierState.draft : tiers;
-  const [uploadToken, setUploadToken] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1115,22 +1245,13 @@ function RewardTierManager({
       setStatus("");
       return;
     }
-    if (!import.meta.env.DEV && !uploadToken.trim()) {
-      setError("Enter the server photo upload token to save public reward offers.");
-      setStatus("");
-      return;
-    }
-
     setSaving(true);
     setError("");
     setStatus("");
     try {
       const response = await fetch("/api/reward-tiers", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...(uploadToken.trim() ? { Authorization: `Bearer ${uploadToken.trim()}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tiers: sorted }),
       });
       const result = await response.json() as { tiers?: unknown; error?: string };
@@ -1169,7 +1290,6 @@ function RewardTierManager({
       </div>
       <div className="reward-tier-admin-actions">
         <button type="button" className="catalog-folder-button" onClick={addTier} disabled={draftTiers.length >= 30}>Add reward tier</button>
-        <label className="reward-token-label">Server photo upload token<input type="password" value={uploadToken} autoComplete="off" onChange={(event) => setUploadToken(event.target.value)} placeholder="Enter the server token" /></label>
         <button type="button" className="save-product" onClick={() => void saveTiers()} disabled={saving}>{saving ? "Saving rewards..." : "Save shopper offers"}</button>
       </div>
       {error && <p className="catalog-maker-error" role="alert">{error}</p>}
@@ -1178,63 +1298,65 @@ function RewardTierManager({
   );
 }
 
-function CustomerRegistrationManager() {
-  const [token, setToken] = useState("");
+function AdminCustomersPage({ onBack }: { onBack: () => void }) {
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const loadCustomers = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    const loadCustomers = async () => {
     setLoading(true);
     setError("");
-    setStatus("");
     try {
-      const response = await fetch("/api/customers", {
-        headers: !import.meta.env.DEV && token.trim()
-          ? { Authorization: "Bearer " + token.trim() }
-          : {},
-      });
-      const result = await response.json() as { customers?: unknown; error?: string };
-      if (!response.ok) throw new Error(result.error || "Customer registrations could not be loaded.");
+      const response = await fetch("/api/customers");
+      const result = await readApiResult<{ customers?: unknown }>(response);
       if (!Array.isArray(result.customers) || !result.customers.every(isCustomerRecord)) {
         throw new Error("The server returned invalid customer registration data.");
       }
-      setCustomers(result.customers);
-      setStatus(`${result.customers.length} registration${result.customers.length === 1 ? "" : "s"} loaded.`);
+      if (!cancelled) setCustomers(result.customers);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Customer registrations could not be loaded.");
+      if (!cancelled) setError(cause instanceof Error ? cause.message : "Customer registrations could not be loaded.");
     } finally {
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     }
-  };
+    };
+    void loadCustomers();
+    return () => { cancelled = true; };
+  }, []);
 
   return (
-    <section className="admin-products customer-manager">
-      <div className="admin-products-head">
-        <h2>Customer registrations</h2>
-        <span>Contact details shared by customers</span>
+    <main className="admin-page">
+      <button type="button" className="back-link" onClick={onBack}>← Back to admin dashboard</button>
+      <div className="admin-top">
+        <div><p className="admin-kicker">SLV / CUSTOMER RECORDS</p><h1>Registered customers</h1><p>Contact details customers shared for order or enquiry follow-up.</p></div>
+        <button type="button" className="save-product" onClick={onBack}>Admin dashboard</button>
       </div>
-      <p className="offer-admin-note">Use customer contact details only to follow up on their enquiry or order. Records are stored on the server and are not included in backups unless you back up PHOTO_STORAGE_DIR.</p>
-      {!import.meta.env.DEV && <label className="customer-token-label">Server photo upload token<input type="password" value={token} autoComplete="off" onChange={(event) => setToken(event.target.value)} placeholder="Enter the server token" /></label>}
-      <button type="button" className="save-product customer-load-button" onClick={() => void loadCustomers()} disabled={loading}>
-        {loading ? "Loading registrations..." : "Load customer registrations"}
-      </button>
       {error && <p className="catalog-maker-error" role="alert">{error}</p>}
-      {status && <p className="catalog-maker-status" role="status">{status}</p>}
-      {customers.length > 0 && (
-        <div className="customer-list">
-          {[...customers].reverse().map((customer) => (
-            <article className="customer-row" key={customer.id}>
-              <div><strong>{customer.name}</strong><small>Registered {new Date(customer.registeredAt).toLocaleString("en-IN")}</small></div>
-              <a href={`tel:${customer.phone}`}>{customer.phone}</a>
-              {customer.email ? <a href={`mailto:${customer.email}`}>{customer.email}</a> : <span className="customer-no-email">No email provided</span>}
-            </article>
-          ))}
-        </div>
-      )}
-    </section>
+      {loading ? <p className="offer-admin-note" role="status">Loading customer records...</p> : customers.length === 0 && !error
+        ? <section className="admin-products"><p>No customer accounts have registered yet.</p></section>
+        : <section className="admin-products customer-manager">
+          <div className="admin-products-head"><h2>Customer registrations</h2><span>{customers.length} records</span></div>
+          <p className="offer-admin-note">Keep these personal details private and use them only for the contact purpose customers agreed to.</p>
+          <div className="customer-list">
+            {[...customers].reverse().map((customer) => (
+              <article className="customer-row" key={customer.id}>
+                <div><strong>{customer.name}</strong><small>Registered {new Date(customer.registeredAt).toLocaleString("en-IN")}</small></div>
+                <a href={`tel:${customer.phone}`}>{customer.phone}</a>
+                <a href={`mailto:${customer.email}`}>{customer.email}</a>
+              </article>
+            ))}
+          </div>
+        </section>}
+    </main>
   );
+}
+
+function InfoPage({ kind, onContact }: { kind: "about" | "contact"; onContact: () => void }) {
+  if (kind === "contact") {
+    return <main className="info-page"><p className="admin-kicker">SLV / CONTACT</p><h1>We’re here to help.</h1><p>Call us about product availability, your cart, or an order.</p><a className="save-product info-call-link" href="tel:+919000488963">Call +91 90004 88963</a><p className="offer-admin-note">For a written enquiry, add your products to the cart and sign in to save your selection.</p></main>;
+  }
+  return <main className="info-page"><p className="admin-kicker">SLV / ABOUT</p><h1>Bright celebrations, great prices.</h1><p>SLV Crackers helps you browse products by category, prepare a clear order summary, and keep your selections together in your cart.</p><button className="save-product" type="button" onClick={onContact}>Contact SLV Crackers →</button></main>;
 }
 
 function Catalogue({
@@ -1248,6 +1370,7 @@ function Catalogue({
   onSaveRewardTiers,
   onWebsite,
   onPhotoManagement,
+  onCustomers,
   onLogout,
 }: {
   products: Product[];
@@ -1260,6 +1383,7 @@ function Catalogue({
   onSaveRewardTiers: (tiers: RewardTier[]) => void;
   onWebsite: () => void;
   onPhotoManagement: () => void;
+  onCustomers: () => void;
   onLogout: () => void;
 }) {
   const empty: Product = {
@@ -1302,10 +1426,10 @@ function Catalogue({
         <div className="admin-actions">
           <button onClick={onWebsite}>View customer site</button>
           <button onClick={onPhotoManagement}>Manage category photos</button>
+          <button onClick={onCustomers}>Customer details</button>
           <button onClick={onLogout}>Sign out</button>
         </div>
       </div>
-      <CustomerRegistrationManager />
       <section className="admin-editor">
         <h2>
           {editing === null ? "Add a new cracker" : "Edit cracker details"}

@@ -1,7 +1,8 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 const projectRoot = process.cwd();
 const distDirectory = resolve(projectRoot, 'dist');
@@ -11,14 +12,24 @@ const uploadDirectory = resolve(storageDirectory, 'product-images');
 const manifestPath = resolve(storageDirectory, 'productImages.json');
 const rewardTiersPath = resolve(storageDirectory, 'rewardTiers.json');
 const customersPath = resolve(storageDirectory, 'customers.json');
+const cartsPath = resolve(storageDirectory, 'customerCarts.json');
 const sourceManifestPath = resolve(projectRoot, 'src', 'productImages.json');
 const sourceRewardTiersPath = resolve(projectRoot, 'src', 'rewardTiers.json');
 const uploadToken = process.env.PHOTO_UPLOAD_TOKEN || '';
+const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+const adminPassword = process.env.ADMIN_PASSWORD || '';
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4173);
 const maximumProductId = 102;
 const maximumImageBytes = 1_500_000;
 const maximumRequestBytes = 2_100_000;
+const derivePassword = promisify(scryptCallback);
+const sessions = new Map();
+const sessionLifetimeMs = 8 * 60 * 60 * 1000;
+const passwordSaltBytes = 16;
+const passwordHashBytes = 64;
+const customerSessionCookie = 'slv_customer_session';
+const adminSessionCookie = 'slv_admin_session';
 const mimeTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -39,13 +50,55 @@ function sendJson(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
+function readCookies(request) {
+  return Object.fromEntries((request.headers.cookie || '').split(';').map((part) => {
+    const separator = part.indexOf('=');
+    return separator < 0 ? ['', ''] : [part.slice(0, separator).trim(), decodeURIComponent(part.slice(separator + 1).trim())];
+  }).filter(([name]) => name));
+}
+
+function getSession(request, kind) {
+  const cookieName = kind === 'admin' ? adminSessionCookie : customerSessionCookie;
+  const token = readCookies(request)[cookieName];
+  const session = token ? sessions.get(token) : null;
+  if (!session || session.kind !== kind || session.expiresAt <= Date.now()) {
+    if (token) sessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+function setSessionCookie(response, kind, token, request) {
+  const cookieName = kind === 'admin' ? adminSessionCookie : customerSessionCookie;
+  const secure = request.headers['x-forwarded-proto'] === 'https';
+  response.setHeader('Set-Cookie', `${cookieName}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionLifetimeMs / 1000}${secure ? '; Secure' : ''}`);
+}
+
+function clearSessionCookie(response, kind, request) {
+  const cookieName = kind === 'admin' ? adminSessionCookie : customerSessionCookie;
+  const secure = request.headers['x-forwarded-proto'] === 'https';
+  response.setHeader('Set-Cookie', `${cookieName}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? '; Secure' : ''}`);
+}
+
+function createSession(kind, userId = '') {
+  const token = randomBytes(32).toString('base64url');
+  sessions.set(token, { kind, userId, expiresAt: Date.now() + sessionLifetimeMs });
+  return token;
+}
+
+function sessionUser(customer) {
+  return { id: customer.id, name: customer.name, phone: customer.phone, email: customer.email };
+}
+
 function isAuthorized(request) {
-  if (!uploadToken) return false;
   const authorization = request.headers.authorization || '';
   const suppliedToken = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
   const expected = Buffer.from(uploadToken);
   const supplied = Buffer.from(suppliedToken);
-  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+  const tokenAuthorized = Boolean(uploadToken)
+    && expected.length === supplied.length
+    && timingSafeEqual(expected, supplied);
+  return tokenAuthorized || Boolean(getSession(request, 'admin'));
 }
 
 function isSecureUpload(request) {
@@ -59,18 +112,6 @@ function isSecureUpload(request) {
     return isLoopback && forwardedProto.split(',')[0].trim().toLowerCase() === 'https';
   }
   return isLoopback;
-}
-
-function normalizeCustomer(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  if (value.consented !== true) return null;
-  const name = typeof value.name === 'string' ? value.name.trim() : '';
-  const phone = typeof value.phone === 'string' ? value.phone.trim() : '';
-  const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
-  if (name.length < 2 || name.length > 100) return null;
-  if (!/^[0-9]{10}$/.test(phone)) return null;
-  if (email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return null;
-  return { name, phone, email };
 }
 
 async function readCustomers() {
@@ -93,46 +134,247 @@ async function saveCustomers(customers) {
   await rename(temporaryPath, customersPath);
 }
 
-async function handleCustomersApi(request, response) {
-  if (request.method !== 'GET' && request.method !== 'POST') {
-    sendJson(response, 405, { error: 'Use POST to register or GET to view registrations.' });
-    return;
+async function parseJsonBody(request, response, message) {
+  try {
+    return JSON.parse(await readRequestBody(request));
+  } catch (error) {
+    sendJson(response, error.statusCode || 400, { error: error.statusCode ? error.message : message });
+    return null;
   }
+}
+
+function normalizeCustomer(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (value.consented !== true) return null;
+  const name = typeof value.name === 'string' ? value.name.trim() : '';
+  const phone = typeof value.phone === 'string' ? value.phone.trim() : '';
+  const email = typeof value.email === 'string' ? value.email.trim().toLowerCase() : '';
+  const password = typeof value.password === 'string' ? value.password : '';
+  if (name.length < 2 || name.length > 100) return null;
+  if (!/^[0-9]{10}$/.test(phone)) return null;
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  if (password.length < 10 || password.length > 128) return null;
+  return { name, phone, email, password };
+}
+
+async function handleCustomerAuth(request, response, action) {
   if (!isSecureUpload(request)) {
-    sendJson(response, 400, { error: 'Customer registration and records require HTTPS or a local SSH tunnel.' });
+    sendJson(response, 400, { error: 'Sign-in and registration require HTTPS or a local SSH tunnel.' });
     return;
   }
-  if (request.method === 'GET') {
-    if (!isAuthorized(request)) {
-      sendJson(response, 401, { error: 'Enter the server photo upload token to view customer registrations.' });
+  if (action === 'session' && request.method === 'GET') {
+    const session = getSession(request, 'customer');
+    if (!session) {
+      sendJson(response, 200, { user: null });
       return;
     }
     const customers = await readCustomers();
-    sendJson(response, 200, { customers });
+    const customer = customers.find((item) => item.id === session.userId);
+    if (!customer) {
+      sendJson(response, 200, { user: null });
+      return;
+    }
+    sendJson(response, 200, { user: sessionUser(customer) });
     return;
   }
+  if (action === 'logout' && request.method === 'POST') {
+    const sessionToken = readCookies(request)[customerSessionCookie];
+    if (sessionToken) sessions.delete(sessionToken);
+    clearSessionCookie(response, 'customer', request);
+    sendJson(response, 200, { signedOut: true });
+    return;
+  }
+  if (request.method !== 'POST' || (action !== 'register' && action !== 'login')) {
+    sendJson(response, 405, { error: 'Unsupported customer authentication request.' });
+    return;
+  }
+  const payload = await parseJsonBody(request, response, 'Account details must be valid JSON.');
+  if (!payload) return;
+  const customers = await readCustomers();
+  let customer;
+  if (action === 'register') {
+    const normalized = normalizeCustomer(payload);
+    if (!normalized) {
+      sendJson(response, 400, { error: 'Enter your name, 10-digit mobile, valid email, password (at least 10 characters), and consent.' });
+      return;
+    }
+    const existingCustomerIndex = customers.findIndex((item) => item.email === normalized.email);
+    const existingCustomer = existingCustomerIndex >= 0 ? customers[existingCustomerIndex] : null;
+    if (existingCustomer?.passwordHash) {
+      sendJson(response, 409, { error: 'An account with this email already exists. Sign in instead.' });
+      return;
+    }
+    if (customers.length >= 10_000) {
+      sendJson(response, 507, { error: 'Customer registrations are full. Contact the site administrator.' });
+      return;
+    }
+    const salt = randomBytes(passwordSaltBytes);
+    const passwordHash = await derivePassword(normalized.password, salt, passwordHashBytes);
+    const timestamp = new Date().toISOString();
+    customer = {
+      id: randomUUID(),
+      name: normalized.name,
+      phone: normalized.phone,
+      email: normalized.email,
+      passwordSalt: salt.toString('hex'),
+      passwordHash: passwordHash.toString('hex'),
+      registeredAt: existingCustomer?.registeredAt || timestamp,
+      consentedAt: timestamp,
+    };
+    if (existingCustomerIndex >= 0) customers[existingCustomerIndex] = customer;
+    else customers.push(customer);
+    await saveCustomers(customers);
+  } else {
+    const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+    const password = typeof payload.password === 'string' ? payload.password : '';
+    customer = customers.find((item) => item.email === email && item.passwordSalt && item.passwordHash);
+    if (!customer || password.length > 128) {
+      sendJson(response, 401, { error: 'Email or password is incorrect.' });
+      return;
+    }
+    const suppliedHash = await derivePassword(password, Buffer.from(customer.passwordSalt, 'hex'), passwordHashBytes);
+    const storedHash = Buffer.from(customer.passwordHash, 'hex');
+    if (suppliedHash.length !== storedHash.length || !timingSafeEqual(suppliedHash, storedHash)) {
+      sendJson(response, 401, { error: 'Email or password is incorrect.' });
+      return;
+    }
+  }
+  const token = createSession('customer', customer.id);
+  setSessionCookie(response, 'customer', token, request);
+  sendJson(response, action === 'register' ? 201 : 200, { user: sessionUser(customer) });
+}
 
-  let payload;
-  try {
-    payload = JSON.parse(await readRequestBody(request));
-  } catch (error) {
-    sendJson(response, error.statusCode || 400, { error: error.statusCode ? error.message : 'Registration details must be valid JSON.' });
+async function handleAdminAuth(request, response, action) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Admin sign-in requires HTTPS or a local SSH tunnel.' });
     return;
   }
-  const customer = normalizeCustomer(payload);
-  if (!customer) {
-    sendJson(response, 400, { error: 'Enter a valid name, 10-digit mobile number, and optional email address.' });
+  if (action === 'session' && request.method === 'GET') {
+    const authenticated = Boolean(getSession(request, 'admin'));
+    sendJson(response, 200, { authenticated });
+    return;
+  }
+  if (action === 'logout' && request.method === 'POST') {
+    const sessionToken = readCookies(request)[adminSessionCookie];
+    if (sessionToken) sessions.delete(sessionToken);
+    clearSessionCookie(response, 'admin', request);
+    sendJson(response, 200, { signedOut: true });
+    return;
+  }
+  if (action !== 'login' || request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Unsupported administrator authentication request.' });
+    return;
+  }
+  if (!adminEmail || !adminPassword) {
+    sendJson(response, 503, { error: 'Admin sign-in is not configured. Set ADMIN_EMAIL and ADMIN_PASSWORD on the server.' });
+    return;
+  }
+  const payload = await parseJsonBody(request, response, 'Admin sign-in details must be valid JSON.');
+  if (!payload) return;
+  const suppliedEmail = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  const suppliedPassword = typeof payload.password === 'string' ? payload.password : '';
+  const emailMatches = Buffer.from(suppliedEmail);
+  const expectedEmail = Buffer.from(adminEmail);
+  const passwordMatches = Buffer.from(suppliedPassword);
+  const expectedPassword = Buffer.from(adminPassword);
+  const validEmail = emailMatches.length === expectedEmail.length && timingSafeEqual(emailMatches, expectedEmail);
+  const validPassword = passwordMatches.length === expectedPassword.length && timingSafeEqual(passwordMatches, expectedPassword);
+  if (!validEmail || !validPassword) {
+    sendJson(response, 401, { error: 'Admin email or password is incorrect.' });
+    return;
+  }
+  const token = createSession('admin');
+  setSessionCookie(response, 'admin', token, request);
+  sendJson(response, 200, { authenticated: true });
+}
+
+async function handleCustomersApi(request, response) {
+  if (request.method !== 'GET') {
+    sendJson(response, 405, { error: 'Use GET to view customer registrations.' });
+    return;
+  }
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Customer records require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (!getSession(request, 'admin')) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to view customer registrations.' });
     return;
   }
   const customers = await readCustomers();
-  if (customers.length >= 10_000) {
-    sendJson(response, 507, { error: 'Customer registrations are full. Contact the site administrator.' });
+  sendJson(response, 200, {
+    customers: customers.map(({ id, name, phone, email, registeredAt, consentedAt }) => ({
+      id, name, phone, email, registeredAt, consentedAt,
+    })),
+  });
+}
+
+function normalizeCart(value) {
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const items = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    if (!Number.isSafeInteger(item.id) || item.id < 1 || item.id > 1_000_000) return null;
+    if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 160) return null;
+    if (typeof item.category !== 'string' || item.category.length > 100) return null;
+    if (!Number.isSafeInteger(item.price) || item.price < 0 || item.price > 10_000_000) return null;
+    if (typeof item.pack !== 'string' || item.pack.length > 160) return null;
+    if (!Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 100_000) return null;
+    const image = typeof item.image === 'string' && item.image.length <= 500
+      && (item.image.startsWith('/product-images/') || item.image.startsWith('https://'))
+      ? item.image
+      : '';
+    items.push({
+      id: item.id,
+      name: item.name.trim(),
+      category: item.category,
+      price: item.price,
+      pack: item.pack,
+      image,
+      quantity: item.quantity,
+    });
+  }
+  return items;
+}
+
+async function handleCustomerCart(request, response) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Customer carts require HTTPS or a local SSH tunnel.' });
     return;
   }
-  const timestamp = new Date().toISOString();
-  customers.push({ id: randomUUID(), ...customer, registeredAt: timestamp, consentedAt: timestamp });
-  await saveCustomers(customers);
-  sendJson(response, 201, { saved: true });
+  const session = getSession(request, 'customer');
+  if (!session) {
+    sendJson(response, 401, { error: 'Sign in to load or save your cart.' });
+    return;
+  }
+  let savedCarts = {};
+  try {
+    savedCarts = JSON.parse(await readFile(cartsPath, 'utf8'));
+    if (!savedCarts || typeof savedCarts !== 'object' || Array.isArray(savedCarts)) throw new Error('Saved customer carts are invalid.');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (request.method === 'GET') {
+    sendJson(response, 200, { cart: normalizeCart(savedCarts[session.userId] || []) || [] });
+    return;
+  }
+  if (request.method !== 'PUT') {
+    sendJson(response, 405, { error: 'Use GET to load or PUT to save your cart.' });
+    return;
+  }
+  const payload = await parseJsonBody(request, response, 'Cart details must be valid JSON.');
+  if (!payload) return;
+  const cart = normalizeCart(payload.cart);
+  if (!cart) {
+    sendJson(response, 400, { error: 'Cart contains invalid items or quantities.' });
+    return;
+  }
+  savedCarts[session.userId] = cart;
+  await mkdir(storageDirectory, { recursive: true });
+  const temporaryPath = `${cartsPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(savedCarts, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, cartsPath);
+  sendJson(response, 200, { saved: true });
 }
 
 async function readManifest(path) {
@@ -282,7 +524,7 @@ async function handleImageApi(request, response, url) {
     sendJson(response, 405, { error: 'Use GET, POST, or DELETE for product photos.' });
     return;
   }
-  if (!uploadToken) {
+  if (!uploadToken && !getSession(request, 'admin')) {
     sendJson(response, 503, { error: 'Photo uploads are not configured on this server.' });
     return;
   }
@@ -359,7 +601,7 @@ async function handleRewardTiersApi(request, response) {
     sendJson(response, 405, { error: 'Use GET to list or PUT to update reward tiers.' });
     return;
   }
-  if (!uploadToken) {
+  if (!uploadToken && !getSession(request, 'admin')) {
     sendJson(response, 503, { error: 'Reward updates are not configured on this server.' });
     return;
   }
@@ -402,6 +644,18 @@ const server = createServer(async (request, response) => {
       await handleCustomersApi(request, response);
       return;
     }
+    if (url.pathname === '/api/auth/register' || url.pathname === '/api/auth/login' || url.pathname === '/api/auth/session' || url.pathname === '/api/auth/logout') {
+      await handleCustomerAuth(request, response, url.pathname.split('/').at(-1));
+      return;
+    }
+    if (url.pathname === '/api/admin/login' || url.pathname === '/api/admin/session' || url.pathname === '/api/admin/logout') {
+      await handleAdminAuth(request, response, url.pathname.split('/').at(-1));
+      return;
+    }
+    if (url.pathname === '/api/customer-cart') {
+      await handleCustomerCart(request, response);
+      return;
+    }
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       sendJson(response, 405, { error: 'Method not allowed.' });
       return;
@@ -425,6 +679,6 @@ const server = createServer(async (request, response) => {
 server.listen(port, host, () => {
   console.log(`Production site listening at http://${host}:${port}`);
   console.log(uploadToken
-    ? 'Product photo uploads are enabled.'
-    : 'Product photo uploads are disabled; set PHOTO_UPLOAD_TOKEN to enable them.');
+    ? 'Administrator sessions and the configured upload token can manage product photos and rewards.'
+    : 'Product photo and reward changes require an administrator session; PHOTO_UPLOAD_TOKEN is not configured.');
 });

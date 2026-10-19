@@ -49,13 +49,10 @@ function normalizeLabel(value: string) {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-async function saveProjectPhoto(productId: number, photo: ProductPhoto, uploadToken: string): Promise<string> {
+async function saveProjectPhoto(productId: number, photo: ProductPhoto): Promise<string> {
   const response = await fetch("/api/product-images", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {}),
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ productId, data: photo.data }),
   });
   if (!response.headers.get("content-type")?.includes("application/json")) {
@@ -68,10 +65,9 @@ async function saveProjectPhoto(productId: number, photo: ProductPhoto, uploadTo
   return result.image;
 }
 
-async function removeProjectPhoto(productId: number, uploadToken: string) {
+async function removeProjectPhoto(productId: number) {
   const response = await fetch(`/api/product-images?productId=${productId}`, {
     method: "DELETE",
-    headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
   });
   if (!response.headers.get("content-type")?.includes("application/json")) {
     throw new Error("Photo removal is unavailable on this server. Configure the production image API or run the Vite development server.");
@@ -230,7 +226,6 @@ export default function CatalogMaker({
   );
   const [selectedCategory, setSelectedCategory] = useState("All categories");
   const [search, setSearch] = useState("");
-  const [uploadToken, setUploadToken] = useState("");
   const [error, setError] = useState("");
   const [importStatus, setImportStatus] = useState("");
   const [isImporting, setIsImporting] = useState(false);
@@ -274,7 +269,7 @@ export default function CatalogMaker({
   const attachPhoto = async (itemId: number, file: File) => {
     try {
       const photo = await preparePhoto(file);
-      const imageUrl = await saveProjectPhoto(itemId, photo, uploadToken);
+      const imageUrl = await saveProjectPhoto(itemId, photo);
       setPhotos((current) => ({ ...current, [itemId]: photo }));
       onProductImageChange(itemId, imageUrl);
       setError("");
@@ -322,7 +317,7 @@ export default function CatalogMaker({
 
         try {
           const photo = await preparePhoto(file);
-          const imageUrl = await saveProjectPhoto(item.id, photo, uploadToken);
+          const imageUrl = await saveProjectPhoto(item.id, photo);
           imported[item.id] = photo;
           onProductImageChange(item.id, imageUrl);
           claimedItems.add(item.id);
@@ -385,17 +380,6 @@ export default function CatalogMaker({
             {categories.map((category) => <option key={category}>{category}</option>)}
           </select>
         </label>
-        <label>
-          Photo upload token
-          <input
-            type="password"
-            name="photo-upload-token"
-            autoComplete="off"
-            value={uploadToken}
-            onChange={(event) => setUploadToken(event.target.value)}
-            placeholder="Enter the server token"
-          />
-        </label>
         <p>{Object.keys(photos).length} of {crackerCatalog.length} photos added</p>
         <label className="catalog-folder-button">
           {isImporting ? "Importing folder..." : "Import photos folder"}
@@ -451,7 +435,7 @@ export default function CatalogMaker({
                   type="button"
                   onClick={async () => {
                     try {
-                      await removeProjectPhoto(item.id, uploadToken);
+                      await removeProjectPhoto(item.id);
                       setPhotos((current) => {
                         const next = { ...current };
                         delete next[item.id];

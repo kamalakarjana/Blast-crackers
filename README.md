@@ -1,35 +1,6 @@
-# React + TypeScript + Vite
+# SLV Crackers
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+React, TypeScript, and Vite storefront with a Node production server. Use `npm run dev` for local development, `npm run build` to create the production site, and `npm start` to serve it.
 
 ## Production deployment and product photos
 
@@ -44,10 +15,19 @@ export PHOTO_UPLOAD_TOKEN="$(openssl rand -hex 32)"
 export PHOTO_STORAGE_DIR=/var/lib/slv-crackers
 export HOST=127.0.0.1
 export PORT=4173
+export ADMIN_EMAIL=owner@example.com
+export ADMIN_PASSWORD="$(openssl rand -hex 24)"
 npm start
 ```
 
-Keep the token private in your process manager; the example above generates a new token and is suitable for a manual test. For a persistent systemd deployment on the provided Ubuntu EC2 layout, install the included service:
+For systemd, keep these values in `/etc/slv-crackers.env`, not in the frontend or a checked-in file. Create the file with `sudo nano /etc/slv-crackers.env` and set `PHOTO_UPLOAD_TOKEN`, `PHOTO_STORAGE_DIR`, `HOST`, `PORT`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`. Generate strong values for the secrets with `openssl rand -hex 32` and `openssl rand -hex 24`, then restrict the file:
+
+```sh
+sudo chown root:root /etc/slv-crackers.env
+sudo chmod 600 /etc/slv-crackers.env
+```
+
+For a persistent systemd deployment on the provided Ubuntu EC2 layout, install the included service:
 
 ```sh
 sudo cp deploy/slv-crackers.service /etc/systemd/system/slv-crackers.service
@@ -84,9 +64,13 @@ server {
 
 If you do not have a domain yet, keep port 4173 private and use an SSH tunnel for photo, reward, and customer administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration and customer registration. Do not enter the token or customer contact details on a public HTTP page.
 
-Open **PDF Catalog** to add, replace, or remove product photos by category. In the admin dashboard, use **Manage category photos** for the same controls and edit the stacked shopping reward tiers. Enter the server's `PHOTO_UPLOAD_TOKEN` when saving changes. Product photos and reward tiers are stored under `PHOTO_STORAGE_DIR` and persist across app rebuilds. Viewing the site, product photos, and rewards is public; changing photos and rewards requires the token.
+Open **PDF Catalog** to download the catalog. In the authenticated admin dashboard, use **Manage category photos** to add, replace, or remove product photos, and edit the stacked shopping reward tiers. Product photos and reward tiers are stored under `PHOTO_STORAGE_DIR` and persist across app rebuilds. Viewing the site, product photos, and rewards is public; changing photos and rewards requires an admin session (or the private upload token for direct API use).
 
-Customer registrations collect a name, mobile number, email address, and explicit contact consent; passwords are not collected or stored. Records are written to `PHOTO_STORAGE_DIR/customers.json`. In **Shop management**, use **Customer registrations** and enter `PHOTO_UPLOAD_TOKEN` to view contacts and follow up by phone or email. The production customer API requires HTTPS or a local SSH tunnel, and the customer list also requires the token. Back up `PHOTO_STORAGE_DIR` securely and restrict access to that backup; it contains personal contact details. Local Vite development registrations are saved under the ignored project `data/` directory.
+Customer accounts collect a name, mobile number, email address, password, and explicit contact consent. Passwords are stored as salted scrypt hashes, never as plain text. Records are written to `PHOTO_STORAGE_DIR/customers.json`; account carts are stored separately in `customerCarts.json`. Existing contact-only records can be upgraded by registering with the same email. The customer **Sign in** page is at `/#/login`. Carts restore per account and remain on the server after sign-out.
+
+The administrator signs in at `/#/admin/login` using `ADMIN_EMAIL` and `ADMIN_PASSWORD` from the server environment. There are no default or client-side admin credentials. The admin dashboard has a separate **Customer details** page; `/api/customers` requires an active admin session and never returns password hashes. Back up `PHOTO_STORAGE_DIR` securely and restrict access to that backup because it contains customer contact information and cart selections.
+
+In local development, Vite provides the same account and admin APIs. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in the environment before starting `npm run dev` to use the admin page. Development API writes are restricted to loopback requests and use `PHOTO_STORAGE_DIR` when set, otherwise the ignored project `data/` directory. Production account and customer-record APIs require HTTPS or a local SSH tunnel. Do not enter passwords or customer details on a public plain-HTTP page.
 
 The cart's **Download PDF** action creates a branded portrait order summary using the catalog's emerald-and-gold style, with itemized quantities, discounts, total, and unlocked shopping rewards.
 
