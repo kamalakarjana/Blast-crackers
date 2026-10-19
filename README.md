@@ -30,3 +30,9 @@ If you are developing a production application, we recommend enabling type-aware
 ```
 
 See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+
+## Build an illustrated cracker price list
+
+Run `npm install` and `npm run dev`, then open **PDF Catalog** in the site navigation. Use **Import photos folder** to select a category-organized folder, or add photos to products individually. Matching uses the category folder and image filename; unmatched files are reported and skipped. Select **Download PDF** to save the single-column illustrated catalog. All 102 items from the supplied SLV price list are included; products without an uploaded photo appear with a photo placeholder.
+
+Uploaded photos stay in the current browser page and are not saved to the server. Download the PDF before refreshing or closing the page.

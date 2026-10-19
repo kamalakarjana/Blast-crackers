@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { jsPDF } from "jspdf";
+import CatalogMaker from "./CatalogMaker";
+import { crackerCatalog } from "./crackerCatalog";
 import "./App.css";
 
 type Product = {
@@ -7,7 +9,6 @@ type Product = {
   name: string;
   category: string;
   price: number;
-  mrp: number;
   pack: string;
   image: string;
 };
@@ -22,124 +23,35 @@ type Offer = {
   firstOrderOnly: boolean;
   enabled: boolean;
 };
-const s3BaseUrl = "https://blast-crackers.s3.ap-south-1.amazonaws.com/";
-
-const seed: Product[] = [
-  {
-    id: 1,
-    name: '2 3/4" Kuruvai Crackers',
-    category: "One Sound Crackers",
-    price: 9,
-    mrp: 45,
-    pack: "5 Pieces / Packet",
-    image: `${s3BaseUrl}kuruvi_1.webp`,
-  },
-  {
-    id: 2,
-    name: '4" Lakshmi Crackers',
-    category: "One Sound Crackers",
-    price: 23,
-    mrp: 115,
-    pack: "5 Pieces / Packet",
-    image:
-      "https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 3,
-    name: '4" Deluxe Lakshmi',
-    category: "One Sound Crackers",
-    price: 37,
-    mrp: 185,
-    pack: "5 Pieces / Packet",
-    image:
-      "https://images.unsplash.com/photo-1509228627152-72ae9ae6848d?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 4,
-    name: '4" Deluxe Gold Lakshmi Crackers',
-    category: "One Sound Crackers",
-    price: 41,
-    mrp: 205,
-    pack: "5 Pieces / Packet",
-    image:
-      "https://images.unsplash.com/photo-1577083288073-40892c0860a4?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 5,
-    name: "Colour Changing Flower Pots",
-    category: "Flower Pots Crackers",
-    price: 85,
-    mrp: 300,
-    pack: "5 Pieces / Box",
-    image:
-      "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 6,
-    name: "Whistling Moon",
-    category: "Night Time Collection",
-    price: 120,
-    mrp: 400,
-    pack: "10 Pieces / Box",
-    image:
-      "https://images.unsplash.com/photo-1464207687429-7505649dae38?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 7,
-    name: "Trail Blazer Crackers",
-    category: "Trail Crackers",
-    price: 65,
-    mrp: 220,
-    pack: "10 Pieces / Box",
-    image:
-      "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 8,
-    name: "Trail Thunder Shots",
-    category: "Trail Crackers",
-    price: 95,
-    mrp: 320,
-    pack: "10 Pieces / Box",
-    image:
-      "https://images.unsplash.com/photo-1530103862676-de8c9debad1d?auto=format&fit=crop&w=160&q=80",
-  },
-  {
-    id: 9,
-    name: "Trail Sparkler Combo",
-    category: "Trail Crackers",
-    price: 110,
-    mrp: 360,
-    pack: "6 Pieces / Box",
-    image:
-      "https://images.unsplash.com/photo-1508614589041-895b88991e3e?auto=format&fit=crop&w=160&q=80",
-  },
-];
-const defaultCategories = [
-  "Kids Collection",
-  "Day Time Collection",
-  "Night Time Collection",
-  "One Sound Crackers",
-  "Flower Pots Crackers",
-  "Ground Chakkars",
-  "Fancy Ground Chakkars",
-  "Fancy Fountains",
-  "Peacock Fountains",
-  "Fancy Repeating Fountains",
-  "Bijili Bombs",
-  "Wala Crackers (Garlands)",
-  "Fancy Spinners",
-  "Trail Crackers",
-];
+const parsePrice = (value: string | null) => Number(String(value ?? "0").replace(/[^0-9]/g, "")) || 0;
+const seed: Product[] = crackerCatalog.map((item, index) => ({
+  id: index + 1,
+  name: item.name,
+  category: item.category,
+  price: parsePrice(item.price),
+  pack: "As per product listing",
+  image: "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
+}));
+const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
+const getInitialProducts = () => {
+  const saved = readStorage<Product[]>("blast-products", []);
+  const pdfCategories = new Set(defaultCategories);
+  const savedPdfProducts = saved.filter((product) => pdfCategories.has(product.category));
+  const savedById = new Map(savedPdfProducts.map((product) => [product.id, product]));
+  return [
+    ...seed.map((product) => savedById.get(product.id) ?? product),
+    ...savedPdfProducts.filter((product) => !seed.some((seedProduct) => seedProduct.id === product.id)),
+  ];
+};
 const defaultOffers: Offer[] = [
   { id: "first-order", title: "Welcome first order", description: "Register and get ₹50 welcome bonus plus ₹100 off on your first qualifying purchase.", threshold: 1150, discount: 100, firstOrderOnly: true, enabled: true },
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, firstOrderOnly: false, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
-type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry";
-const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry" })[view];
+type View = "login" | "shop" | "cart" | "catalogue" | "offers" | "order-entry" | "pdf-builder";
+const routeForView = (view: View) => ({ login: "#/login", shop: "#/", cart: "#/cart", catalogue: "#/catalogue", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder" })[view];
 const viewForRoute = (): View => {
-  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry" } as Record<string, View>)[window.location.hash] || "login";
+  const route = ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/offers": "offers", "#/login": "login", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder" } as Record<string, View>)[window.location.hash] || "login";
   return route === "catalogue" && localStorage.getItem("blast-admin-session") !== "true" ? "login" : route;
 };
 const downloadCartPdf = (
@@ -150,7 +62,7 @@ const downloadCartPdf = (
 ) => {
   const pdf = new jsPDF();
   pdf.setFontSize(20);
-  pdf.text("BLAST FIREWORKS", 15, 20);
+  pdf.text("SLV CRACKERS", 15, 20);
   pdf.setFontSize(11);
   pdf.text(`Cart summary - ${new Date().toLocaleDateString("en-IN")}`, 15, 29);
   pdf.line(15, 34, 195, 34);
@@ -195,25 +107,15 @@ function readStorage<T>(key: string, fallback: T): T {
 }
 
 function App() {
-  const [products, setProducts] = useState<Product[]>(() =>
-    (() => {
-      const saved = readStorage<Product[]>("blast-products", seed);
-      return [...saved, ...seed.filter((product) => !saved.some((item) => item.id === product.id))];
-    })(),
-  );
+  const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [cart, setCart] = useState<CartItem[]>(() =>
     readStorage<CartItem[]>("blast-cart", []),
   );
-  const [categories, setCategories] = useState<string[]>(() => {
-    const saved = readStorage<string[]>("blast-categories", defaultCategories);
-    return [...saved, ...defaultCategories.filter((item) => !saved.includes(item))];
-  });
+  const categories = defaultCategories;
   const [offers, setOffers] = useState<Offer[]>(() => readStorage<Offer[]>("blast-offers", defaultOffers));
   const [orderCount, setOrderCount] = useState(() => readStorage<number>("blast-order-count", 0));
   const [category, setCategory] = useState(() => {
-    const saved = readStorage<string[]>("blast-categories", defaultCategories);
-    const available = [...saved, ...defaultCategories.filter((item) => !saved.includes(item))];
-    return available.includes("Trail Crackers") ? "Trail Crackers" : available[0] || "";
+    return defaultCategories.includes("Sparklers") ? "Sparklers" : defaultCategories[0] || "";
   });
   const [view, setView] = useState<View>(() => viewForRoute());
   const [authOpen, setAuthOpen] = useState(false);
@@ -230,7 +132,7 @@ function App() {
   }, [products]);
   useEffect(() => {
     localStorage.setItem("blast-categories", JSON.stringify(categories));
-  }, [categories]);
+  }, []);
   useEffect(() => {
     localStorage.setItem("blast-offers", JSON.stringify(offers));
   }, [offers]);
@@ -303,11 +205,11 @@ function App() {
         <header className="site-header">
           <button
             className="logo"
-            onClick={() => setShopView("One Sound Crackers")}
+            onClick={() => setShopView("Sparklers")}
           >
             <span className="logo-spark">✦</span>
             <span>
-              BLAST<small>SPARK THE CELEBRATION</small>
+              SLV<small>BRIGHT CELEBRATIONS | GREAT PRICES</small>
             </span>
           </button>
           <nav>
@@ -324,7 +226,8 @@ function App() {
               Quick Enquiry
             </button>
             <button onClick={() => navigate("order-entry")}>Order Entry</button>
-            <button onClick={() => setShopView("One Sound Crackers")}>
+            <button className={view === "pdf-builder" ? "nav-active" : ""} onClick={() => navigate("pdf-builder")}>PDF Catalog</button>
+            <button onClick={() => setShopView("Sparklers")}>
               Crackers
             </button>
             <button className={view === "offers" ? "nav-active" : ""} onClick={() => navigate("offers")}>Offers</button>
@@ -416,8 +319,7 @@ function App() {
               <div className="table-head">
                 <span>No.</span>
                 <span>Product Name</span>
-                <span>MRP</span>
-                <span>Best Price</span>
+                <span>Price</span>
                 <span>Quantity</span>
                 <span>Total</span>
               </div>
@@ -436,7 +338,6 @@ function App() {
                       <small>{product.pack}</small>
                       <span className="media-badges">▧ ●</span>
                     </div>
-                    <del>{money(product.mrp)}</del>
                     <strong className="best-price">
                       {money(product.price)}
                     </strong>
@@ -487,12 +388,26 @@ function App() {
       {view === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); navigate("cart"); }} onCart={() => navigate("cart")} />
       )}
+      {view === "pdf-builder" && (
+        <CatalogMaker
+          products={products}
+          onProductImageChange={(productId, image) => {
+            const fallbackImage = seed.find((product) => product.id === productId)?.image ?? "";
+            setProducts((current) =>
+              current.map((product) =>
+                product.id === productId
+                  ? { ...product, image: image ?? fallbackImage }
+                  : product,
+              ),
+            );
+          }}
+        />
+      )}
       {view === "catalogue" && (
         <Catalogue
           products={products}
           setProducts={setProducts}
           categories={categories}
-          setCategories={setCategories}
           offers={offers}
           setOffers={setOffers}
           onWebsite={() => setShopView()}
@@ -502,9 +417,9 @@ function App() {
           }}
         />
       )}
-      {view !== "login" && (
+      {view !== "login" && view !== "pdf-builder" && (
         <div className="floating-actions">
-          <button className="whatsapp" aria-label="Contact BLAST">
+          <button className="whatsapp" aria-label="Contact SLV Crackers">
             ☎
           </button>
           <button
@@ -517,7 +432,7 @@ function App() {
         </div>
       )}
       <footer>
-        <span>BLAST FIREWORKS</span>
+        <span>SLV CRACKERS</span>
         <span>Safe products. Bright celebrations.</span>
         {view !== "login" && (
           <button onClick={openAdmin}>Shop management</button>
@@ -561,14 +476,14 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
     setProductId("");
     setQuantity(1);
   };
-  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">BLAST / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={products.length} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{Number(productId)} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{products.indexOf(item.product) + 1}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product, index) => <div className="entry-product" key={product.id}><b>#{index + 1}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
+  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={products.length} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{Number(productId)} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{products.indexOf(item.product) + 1}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product, index) => <div className="entry-product" key={product.id}><b>#{index + 1}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
 function OffersPage({ offers, onBack }: { offers: Offer[]; onBack: () => void }) {
   return (
     <main className="offers-page">
       <button className="back-link" onClick={onBack}>← Continue shopping</button>
-      <p className="admin-kicker">BLAST / OFFERS</p>
+      <p className="admin-kicker">SLV / OFFERS</p>
       <h1>Celebrate more, save more.</h1>
       <p className="offers-intro">Every offer is applied automatically at checkout when your order meets its condition.</p>
       <div className="offer-cards">
@@ -711,7 +626,7 @@ function Auth({
         <button type="button" className="close" onClick={onClose}>
           ×
         </button>
-        <h2>Welcome to BLAST</h2>
+        <h2>Welcome to SLV CRACKERS</h2>
         <p>Login or register to continue checkout.</p>
         <input required type="email" placeholder="Email address" />
         <input required type="password" placeholder="Password" />
@@ -728,7 +643,7 @@ function Auth({
 
 function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () => void; onPaid: () => void }) {
   const upiId = "9000488963@ybl";
-  const paymentUri = `upi://pay?pa=${upiId}&pn=BLAST%20FIREWORKS&am=${total}&cu=INR`;
+  const paymentUri = `upi://pay?pa=${upiId}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(paymentUri)}`;
   const copyUpi = async () => {
     await navigator.clipboard?.writeText(upiId);
@@ -775,7 +690,7 @@ function WelcomeReward({ onClose }: { onClose: () => void }) {
           <div className="welcome-intro">
             <span className="welcome-burst">✦</span>
             <p className="welcome-kicker">A LITTLE CELEBRATION GIFT</p>
-            <h2 id="welcome-title">Welcome to BLAST!</h2>
+            <h2 id="welcome-title">Welcome to SLV CRACKERS!</h2>
             <p>We are so glad you are here. Enjoy a bright start to your celebration with us.</p>
             <strong className="reward-amount">₹50 <small>WELCOME REWARD</small></strong>
             <span className="welcome-loading">Preparing your gift...</span>
@@ -798,7 +713,7 @@ function WelcomeReward({ onClose }: { onClose: () => void }) {
             <span className="success-mark">✓</span>
             <p className="welcome-kicker">REWARD CLAIMED</p>
             <h2 id="welcome-title">₹50 is yours, {name}!</h2>
-            <p>Thank you for joining BLAST. Your welcome reward has been recorded successfully.</p>
+            <p>Thank you for joining SLV Crackers. Your welcome reward has been recorded successfully.</p>
             <button type="button" onClick={onClose}>Start shopping</button>
           </div>
         )}
@@ -813,14 +728,14 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
   const [error, setError] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (email === "admin@blast.in" && password === "Blast@123") onLogin();
+    if (email === "admin@slv.in" && password === "Slv@123") onLogin();
     else setError("Incorrect admin email or password.");
   };
   return (
     <main className="admin-login-page">
       <div className="admin-login-card">
         <div className="admin-login-brand">
-          <span>✦</span> BLAST
+          <span>✦</span> SLV
         </div>
         <p className="admin-kicker">STORE ADMINISTRATION</p>
         <h1>Welcome back.</h1>
@@ -834,7 +749,7 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="admin@blast.in"
+            placeholder="admin@slv.in"
               required
             />
           </label>
@@ -851,10 +766,10 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
           {error && <p className="form-error">{error}</p>}
           <button type="submit">Sign in to dashboard →</button>
         </form>
-        <p className="demo-hint">Demo access: admin@blast.in / Blast@123</p>
+        <p className="demo-hint">Demo access: admin@slv.in / Slv@123</p>
       </div>
       <div className="admin-login-art">
-        <span>BLAST</span>
+        <span>SLV</span>
         <p>
           Products in.
           <br />
@@ -869,7 +784,6 @@ function Catalogue({
   products,
   setProducts,
   categories,
-  setCategories,
   offers,
   setOffers,
   onWebsite,
@@ -878,7 +792,6 @@ function Catalogue({
   products: Product[];
   setProducts: (products: Product[]) => void;
   categories: string[];
-  setCategories: (categories: string[]) => void;
   offers: Offer[];
   setOffers: (offers: Offer[]) => void;
   onWebsite: () => void;
@@ -887,18 +800,15 @@ function Catalogue({
   const empty: Product = {
     id: 0,
     name: "",
-    category: "One Sound Crackers",
+    category: "Sparklers",
     price: 0,
-    mrp: 0,
     pack: "",
     image: seed[0].image,
   };
   const [draft, setDraft] = useState<Product>(empty);
   const [editing, setEditing] = useState<number | null>(null);
-  const [categoryName, setCategoryName] = useState("");
-  const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const save = () => {
-    if (!draft.name || draft.price <= 0 || draft.mrp <= 0 || !draft.pack)
+    if (!draft.name || draft.price <= 0 || !draft.pack)
       return;
     const saved = editing === null ? { ...draft, id: Date.now() } : draft;
     setProducts(
@@ -913,27 +823,11 @@ function Catalogue({
     setDraft(product);
     setEditing(product.id);
   };
-  const saveCategory = () => {
-    const nextName = categoryName.trim();
-    if (!nextName) return;
-    if (editingCategory) {
-      setCategories(categories.map((item) => item === editingCategory ? nextName : item));
-      setProducts(products.map((product) => product.category === editingCategory ? { ...product, category: nextName } : product));
-    } else if (!categories.includes(nextName)) setCategories([...categories, nextName]);
-    setCategoryName("");
-    setEditingCategory(null);
-  };
-  const deleteCategory = (name: string) => {
-    if (window.confirm(`Delete ${name} and its products?`)) {
-      setCategories(categories.filter((item) => item !== name));
-      setProducts(products.filter((product) => product.category !== name));
-    }
-  };
   return (
     <main className="admin-page">
       <div className="admin-top">
         <div>
-          <p className="admin-kicker">BLAST / SHOP CONTROL</p>
+          <p className="admin-kicker">SLV / SHOP CONTROL</p>
           <h1>Cracker catalogue</h1>
           <p>
             Update details here and they appear on the customer website
@@ -979,16 +873,6 @@ function Catalogue({
                 setDraft({ ...draft, pack: event.target.value })
               }
               placeholder="5 Pieces / Packet"
-            />
-          </label>
-          <label>
-            MRP (₹)
-            <input
-              type="number"
-              value={draft.mrp || ""}
-              onChange={(event) =>
-                setDraft({ ...draft, mrp: Number(event.target.value) })
-              }
             />
           </label>
           <label>
@@ -1043,9 +927,8 @@ function Catalogue({
         )}
       </section>
       <section className="admin-products category-manager">
-        <div className="admin-products-head"><h2>Categories</h2><span>{categories.length} categories</span></div>
-        <div className="category-form"><input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="Category name" /><button onClick={saveCategory}>{editingCategory ? "Save category" : "Add category"}</button>{editingCategory && <button className="cancel-edit" onClick={() => { setEditingCategory(null); setCategoryName(""); }}>Cancel</button>}</div>
-        {categories.map((item) => <div className="admin-category-row" key={item}><strong>{item}</strong><button onClick={() => { setEditingCategory(item); setCategoryName(item); }}>Edit</button><button onClick={() => deleteCategory(item)}>Delete</button></div>)}
+        <div className="admin-products-head"><h2>PDF categories</h2><span>{categories.length} categories</span></div>
+        {categories.map((item) => <div className="admin-category-row" key={item}><strong>{item}</strong></div>)}
       </section>
       <section className="admin-products offer-manager">
         <div className="admin-products-head"><h2>Offers &amp; checkout rules</h2><span>Edit the live customer offers</span></div>
