@@ -1313,7 +1313,6 @@ function Auth({
           : <label>Email or mobile number<input required type="text" maxLength={254} value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="username" placeholder="Email or 10-digit mobile number" /></label>}
         <label>Password<input required type="password" minLength={mode === "register" ? 10 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} /></label>
         {mode === "register" && <label className="contact-consent"><input type="checkbox" required checked={consented} onChange={(event) => setConsented(event.target.checked)} />I agree that SLV Crackers may store my contact details and contact me about my enquiry or order.</label>}
-        {!import.meta.env.DEV && <small className="contact-security-note">Account sign-in requires the secure HTTPS website or a local SSH tunnel.</small>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="account-submit" type="submit" disabled={saving}>{saving ? "Please wait..." : mode === "login" ? "Sign in →" : "Create account →"}</button>
         {mode === "login" && <a
