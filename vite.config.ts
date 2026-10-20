@@ -82,6 +82,7 @@ function productImageWriter(): Plugin {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
         const authPath = url.pathname === '/api/customers'
+          || url.pathname === '/api/customers/password'
           || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem|customer-orders(?:\/[0-9a-f-]{36}\/confirm)?|orders)$/.test(url.pathname);
         if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/customers' && !authPath) {
           next();
@@ -167,6 +168,42 @@ function productImageWriter(): Plugin {
                 if (token) sessions.delete(token);
                 setSessionCookie(kind, null);
                 sendJson(200, { signedOut: true });
+                return;
+              }
+              if (url.pathname === '/api/customers/password') {
+                if (!currentSession('admin')) {
+                  sendUnauthorized('Sign in as the administrator to reset customer passwords.');
+                  return;
+                }
+                if (request.method !== 'POST') {
+                  sendJson(405, { error: 'Use POST to reset a customer password.' });
+                  return;
+                }
+                const customerId = request.headers['x-customer-id'];
+                const payload: unknown = await parseRequestJson(request);
+                const input = payload && typeof payload === 'object' && !Array.isArray(payload)
+                  ? payload as Record<string, unknown>
+                  : {};
+                const password = typeof input.password === 'string' ? input.password : '';
+                if (typeof customerId !== 'string' || password.length < 10 || password.length > 128) {
+                  sendJson(400, { error: 'Choose a customer and enter a password between 10 and 128 characters.' });
+                  return;
+                }
+                const customers = await readCustomers();
+                const customer = customers.find((item) => item.id === customerId);
+                if (!customer) {
+                  sendJson(404, { error: 'Customer was not found.' });
+                  return;
+                }
+                const salt = randomBytes(16);
+                const hash = await scrypt(password, salt, 64) as Buffer;
+                customer.passwordSalt = salt.toString('hex');
+                customer.passwordHash = hash.toString('hex');
+                await saveJson(customersPath, customers);
+                for (const [token, session] of sessions) {
+                  if (session.kind === 'customer' && session.userId === customerId) sessions.delete(token);
+                }
+                sendJson(200, { updated: true });
                 return;
               }
               if (url.pathname === '/api/customers') {
@@ -416,14 +453,19 @@ function productImageWriter(): Plugin {
                   ? payload as Record<string, unknown>
                   : {};
                 const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+                const identifier = typeof input.identifier === 'string' ? input.identifier.trim() : email;
                 const password = typeof input.password === 'string' ? input.password : '';
-                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length > 128) {
-                  sendJson(400, { error: 'Enter a valid email address and password.' });
+                if (password.length > 128) {
+                  sendJson(400, { error: 'Password must be 128 characters or fewer.' });
                   return;
                 }
                 const customers = await readCustomers();
                 let customer = customers.find((item) => item.email === email);
                 if (url.pathname.endsWith('/register')) {
+                  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+                    sendJson(400, { error: 'Enter a valid email address.' });
+                    return;
+                  }
                   const name = typeof input.name === 'string' ? input.name.trim() : '';
                   const phone = typeof input.phone === 'string' ? input.phone.trim() : '';
                   if (input.consented !== true || name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone) || password.length < 10) {
@@ -460,14 +502,24 @@ function productImageWriter(): Plugin {
                   }
                   await saveJson(customersPath, customers);
                 } else {
+                  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+                  const mobile = identifier.replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+                  const candidates = isEmail
+                    ? customers.filter((item) => item.email === identifier.toLowerCase())
+                    : /^[0-9]{10}$/.test(mobile) ? customers.filter((item) => item.phone === mobile) : [];
+                  if (candidates.length > 1) {
+                    sendJson(400, { error: 'This mobile number is linked to multiple accounts. Sign in with your email instead.' });
+                    return;
+                  }
+                  customer = candidates[0];
                   if (!customer?.passwordSalt || typeof customer.passwordHash !== 'string' || password.length < 1) {
-                    sendJson(401, { error: 'Email or password is incorrect.' });
+                    sendJson(401, { error: 'Email/mobile number or password is incorrect.' });
                     return;
                   }
                   const hash = await scrypt(password, Buffer.from(String(customer.passwordSalt), 'hex'), 64) as Buffer;
                   const expected = Buffer.from(customer.passwordHash, 'hex');
                   if (hash.length !== expected.length || !timingSafeEqual(hash, expected)) {
-                    sendJson(401, { error: 'Email or password is incorrect.' });
+                    sendJson(401, { error: 'Email/mobile number or password is incorrect.' });
                     return;
                   }
                 }

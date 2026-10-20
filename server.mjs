@@ -238,23 +238,76 @@ async function handleCustomerAuth(request, response, action) {
     else customers.push(customer);
     await saveCustomers(customers);
   } else {
-    const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+    const identifier = typeof payload.identifier === 'string'
+      ? payload.identifier.trim()
+      : typeof payload.email === 'string' ? payload.email.trim() : '';
     const password = typeof payload.password === 'string' ? payload.password : '';
-    customer = customers.find((item) => item.email === email && item.passwordSalt && item.passwordHash);
-    if (!customer || password.length > 128) {
-      sendJson(response, 401, { error: 'Email or password is incorrect.' });
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+    const mobile = identifier.replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+    const candidates = isEmail
+      ? customers.filter((item) => item.email === identifier.toLowerCase())
+      : /^[0-9]{10}$/.test(mobile) ? customers.filter((item) => item.phone === mobile) : [];
+    if (candidates.length > 1) {
+      sendJson(response, 400, { error: 'This mobile number is linked to multiple accounts. Sign in with your email instead.' });
+      return;
+    }
+    customer = candidates[0];
+    if (!customer || !customer.passwordSalt || !customer.passwordHash || password.length > 128) {
+      sendJson(response, 401, { error: 'Email/mobile number or password is incorrect.' });
       return;
     }
     const suppliedHash = await derivePassword(password, Buffer.from(customer.passwordSalt, 'hex'), passwordHashBytes);
     const storedHash = Buffer.from(customer.passwordHash, 'hex');
     if (suppliedHash.length !== storedHash.length || !timingSafeEqual(suppliedHash, storedHash)) {
-      sendJson(response, 401, { error: 'Email or password is incorrect.' });
+      sendJson(response, 401, { error: 'Email/mobile number or password is incorrect.' });
       return;
     }
   }
   const token = createSession('customer', customer.id);
   setSessionCookie(response, 'customer', token, request);
   sendJson(response, action === 'register' ? 201 : 200, { user: sessionUser(customer) });
+}
+
+async function handleCustomerPasswordReset(request, response) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Customer password resets require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Use POST to reset a customer password.' });
+    return;
+  }
+  if (!getSession(request, 'admin')) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to reset customer passwords.' });
+    return;
+  }
+  const customerId = request.headers['x-customer-id'];
+  if (typeof customerId !== 'string') {
+    sendJson(response, 400, { error: 'Choose a customer account to reset.' });
+    return;
+  }
+  const payload = await parseJsonBody(request, response, 'New password details must be valid JSON.');
+  if (!payload) return;
+  const password = typeof payload.password === 'string' ? payload.password : '';
+  if (password.length < 10 || password.length > 128) {
+    sendJson(response, 400, { error: 'New password must be between 10 and 128 characters.' });
+    return;
+  }
+  const customers = await readCustomers();
+  const customer = customers.find((item) => item.id === customerId);
+  if (!customer) {
+    sendJson(response, 404, { error: 'Customer was not found.' });
+    return;
+  }
+  const salt = randomBytes(passwordSaltBytes);
+  const passwordHash = await derivePassword(password, salt, passwordHashBytes);
+  customer.passwordSalt = salt.toString('hex');
+  customer.passwordHash = passwordHash.toString('hex');
+  await saveCustomers(customers);
+  for (const [token, session] of sessions) {
+    if (session.kind === 'customer' && session.userId === customerId) sessions.delete(token);
+  }
+  sendJson(response, 200, { updated: true });
 }
 
 async function handleAdminAuth(request, response, action) {
@@ -864,6 +917,10 @@ const requestHandler = async (request, response) => {
     }
     if (url.pathname === '/api/customers') {
       await handleCustomersApi(request, response);
+      return;
+    }
+    if (url.pathname === '/api/customers/password') {
+      await handleCustomerPasswordReset(request, response);
       return;
     }
     if (url.pathname === '/api/orders') {

@@ -107,7 +107,7 @@ type CustomerOrder = {
   attemptedAt: string;
   confirmedAt: string | null;
 };
-type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; email: string; password: string };
+type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; identifier: string; password: string };
 function isCustomerRecord(value: unknown): value is CustomerRecord {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -127,7 +127,7 @@ async function authenticateCustomer(input: AuthenticationInput) {
   const response = await fetch(input.mode === "register" ? "/api/auth/register" : "/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input.mode === "register" ? input.customer : { email: input.email, password: input.password }),
+    body: JSON.stringify(input.mode === "register" ? input.customer : { identifier: input.identifier, password: input.password }),
   });
   const result = await readApiResult<{ user: CustomerIdentity }>(response);
   return result.user;
@@ -1276,6 +1276,7 @@ function Auth({
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [consented, setConsented] = useState(false);
   const [error, setError] = useState("");
@@ -1291,7 +1292,7 @@ function Auth({
     try {
       await onAuth(mode === "register"
         ? { mode, customer: { name, phone, email, password, consented } }
-        : { mode, email, password });
+        : { mode, identifier, password });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Sign-in could not be completed.");
     } finally {
@@ -1307,12 +1308,20 @@ function Auth({
           <label>Your name<input required minLength={2} maxLength={100} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
           <label>Mobile number<input required type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" placeholder="10-digit mobile number" /></label>
         </>}
-        <label>Email address<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
+        {mode === "register"
+          ? <label>Email address<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
+          : <label>Email or mobile number<input required type="text" maxLength={254} value={identifier} onChange={(event) => setIdentifier(event.target.value)} autoComplete="username" placeholder="Email or 10-digit mobile number" /></label>}
         <label>Password<input required type="password" minLength={mode === "register" ? 10 : undefined} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} /></label>
         {mode === "register" && <label className="contact-consent"><input type="checkbox" required checked={consented} onChange={(event) => setConsented(event.target.checked)} />I agree that SLV Crackers may store my contact details and contact me about my enquiry or order.</label>}
         {!import.meta.env.DEV && <small className="contact-security-note">Account sign-in requires the secure HTTPS website or a local SSH tunnel.</small>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="account-submit" type="submit" disabled={saving}>{saving ? "Please wait..." : mode === "login" ? "Sign in →" : "Create account →"}</button>
+        {mode === "login" && <a
+          className="account-switch"
+          href={`https://wa.me/919000488963?text=${encodeURIComponent(`Hello SLV Crackers, I forgot my account password. My registered email/mobile is ${identifier || "[enter your registered email or mobile number]"}. Please help me reset it.`)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >Forgot password? Request an admin reset on WhatsApp</a>}
         <button className="account-switch" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
           {mode === "login" ? "New customer? Create an account" : "Already registered? Sign in"}
         </button>
@@ -1543,6 +1552,9 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  const [resetPasswordForId, setResetPasswordForId] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetStatus, setResetStatus] = useState("");
 
   const loadRecords = async () => {
     setLoading(true);
@@ -1612,6 +1624,23 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
       setError(cause instanceof Error ? cause.message : "Customer record could not be removed.");
     }
   };
+  const updateCustomerPassword = async (event: FormEvent, customerId: string) => {
+    event.preventDefault();
+    setError("");
+    setResetStatus("");
+    try {
+      const response = await fetch("/api/customers/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Customer-Id": customerId },
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      await readApiResult<{ updated: boolean }>(response);
+      setResetPassword("");
+      setResetStatus("Password reset. Share the new password with the customer only after verifying their identity.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Customer password could not be reset.");
+    }
+  };
   const downloadCsv = (filename: string, rows: string[][]) => {
     const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
@@ -1657,6 +1686,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
       <section className="admin-products customer-manager">
         <div className="admin-products-head"><h2>Customer registrations</h2><span>{customers.length} customers · {orders.length} order attempts</span></div>
         <p className="offer-admin-note">One customer account is identified by unique email. Each checkout attempt is retained as a separate order; confirmation here records the customer's confirmation, not independently verified payment.</p>
+        <p className="offer-admin-note">For password reset requests, verify the customer using a previously known contact detail before setting a new password. Resetting signs the customer out of existing sessions.</p>
         <div className="customer-export-actions">
           <button type="button" className="catalog-folder-button" onClick={exportCustomers} disabled={!customers.length}>Download customers CSV</button>
           <button type="button" className="catalog-folder-button" onClick={exportOrders} disabled={!orders.length}>Download order details CSV</button>
@@ -1676,8 +1706,14 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                     <a href={`tel:${customer.phone}`}>Call customer</a>
                     <a href={`mailto:${customer.email}`}>Email customer</a>
                     <button type="button" onClick={() => editCustomer(customer)}>Edit</button>
+                    <button type="button" onClick={() => { setResetPasswordForId(resetPasswordForId === customer.id ? "" : customer.id); setResetPassword(""); setResetStatus(""); }}>Reset password</button>
                     <button type="button" className="catalog-remove-photo" onClick={() => void deleteCustomer(customer)}>Remove</button>
                   </div>
+                  {resetPasswordForId === customer.id && !resetStatus && <form className="customer-editor" onSubmit={(event) => void updateCustomerPassword(event, customer.id)}>
+                    <label>New password<input required type="password" minLength={10} maxLength={128} autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} /></label>
+                    <div className="customer-editor-actions"><button type="submit" className="save-product">Set new password</button></div>
+                  </form>}
+                  {resetPasswordForId === customer.id && resetStatus && <p className="catalog-maker-status" role="status">{resetStatus}</p>}
                   <div className="customer-orders-list">
                     {customerOrders.length ? customerOrders.map((order) => (
                       <article className="customer-order-card" key={order.id}>
