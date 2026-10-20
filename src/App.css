@@ -202,6 +202,11 @@
 .product-row .product-name { display: grid; grid-template-columns: 64px minmax(0, 1fr); justify-content: stretch; gap: 12px; text-align: left; }
 .product-row .product-name .product-photo { margin: 0 auto; }
 .product-row .product-details { text-align: left; }
+.category-section { scroll-margin-top: 105px; margin-bottom: 20px; }
+.category-section .table-wrap { border-radius: 10px; }
+.category-section .table-title { height: 44px; font-size: 17px; }
+.category-section .table-title .category-icon { stroke: #fff; }
+.category-panel { position: sticky; top: 105px; align-self: start; max-height: calc(100vh - 120px); overflow-y: auto; }
 .stepper { min-width: 132px; height: 40px; }
 .stepper button { display: grid; flex: 0 0 38px; place-items: center; width: 38px; padding: 0; font-family: Arial, sans-serif; font-size: 22px; font-weight: 500; line-height: 1; }
 .stepper button:first-child { color: #596980; }

@@ -522,7 +522,6 @@ function App() {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [cart, user, cartReady]);
-  const visible = products.filter((item) => item.category === category);
   const subtotal = cart.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0,
@@ -562,12 +561,37 @@ function App() {
     window.history.pushState({}, "", routeForView(nextView));
   };
   const setShopView = (nextCategory?: string) => navigate("shop", nextCategory);
+  const scrollToCategory = (nextCategory: string) => {
+    setCategory(nextCategory);
+    if (view !== "shop") {
+      navigate("shop", nextCategory);
+      window.setTimeout(() => {
+        document.getElementById(`category-${categories.indexOf(nextCategory)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
+      return;
+    }
+    document.getElementById(`category-${categories.indexOf(nextCategory)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   useEffect(() => {
     const syncRoute = () => setView(viewForRoute());
     window.addEventListener("popstate", syncRoute);
     window.addEventListener("hashchange", syncRoute);
     return () => { window.removeEventListener("popstate", syncRoute); window.removeEventListener("hashchange", syncRoute); };
   }, []);
+  useEffect(() => {
+    if (view !== "shop") return;
+    const sections = document.querySelectorAll<HTMLElement>(".category-section");
+    if (!sections.length) return;
+    const observer = new IntersectionObserver((entries) => {
+      const visibleSections = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio);
+      const nextCategory = visibleSections[0]?.target.getAttribute("data-category");
+      if (nextCategory) setCategory(nextCategory);
+    }, { rootMargin: "-115px 0px -60% 0px", threshold: [0, 0.1, 0.35, 0.6] });
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [view]);
   useEffect(() => {
     if (!authStateReady) return;
     const isAdminRoute = view === "catalogue" || view === "admin-customers" || view === "order-entry" || view === "pdf-builder";
@@ -757,14 +781,14 @@ function App() {
         <main className="quick-order">
           <aside className="category-panel">
             <h3>CATEGORIES</h3>
-            <select value={category} onChange={(event) => setShopView(event.target.value)} aria-label="Choose category">
+            <select value={category} onChange={(event) => scrollToCategory(event.target.value)} aria-label="Choose category">
               {categories.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
             {categories.map((item) => (
               <button
                 className={category === item ? "category-active" : ""}
                 key={item}
-                onClick={() => setShopView(item)}
+                onClick={() => scrollToCategory(item)}
               >
                 <CategoryIcon category={item} />
                 {item}
@@ -810,62 +834,56 @@ function App() {
               earnedBonusPacks={rewardBonusPacks}
               nextTier={nextRewardTier}
             />
-            <div className="table-wrap">
-              <div className="table-title">
-                <span>✺</span>
-                <strong>{category}</strong>
-              </div>
-              <div className="table-head">
-                <span>No.</span>
-                <span>Product Name</span>
-                <span>Price</span>
-                <span>Quantity</span>
-                <span>Total</span>
-              </div>
-              {visible.map((product) => {
-                const quantity =
-                  cart.find((item) => item.id === product.id)?.quantity || 0;
-                return (
-                  <div className="product-row" key={product.id}>
-                    <span>#{product.id}</span>
-                    <div className="product-name">
-                      <div
-                        className="product-photo"
-                        style={{ backgroundImage: `url(${product.image})` }}
-                      />
-                      <div className="product-details">
-                        <strong>{product.name}</strong>
-                        <small>{product.pack}</small>
-                      </div>
-                    </div>
-                    <strong className="best-price">
-                      {money(product.price)}
-                    </strong>
-                    <div className="stepper">
-                      <button type="button" aria-label={`Decrease quantity for ${product.name}`} onClick={() => changeQuantity(product, -1)}>
-                        −
-                      </button>
-                      <input
-                        aria-label={`Quantity for ${product.name}`}
-                        type="number"
-                        min="0"
-                        value={quantity || ""}
-                        onChange={(event) =>
-                          changeQuantity(
-                            product,
-                            Number(event.target.value || 0) - quantity,
-                          )
-                        }
-                      />
-                      <button type="button" aria-label={`Increase quantity for ${product.name}`} onClick={() => changeQuantity(product, 1)}>
-                        +
-                      </button>
-                    </div>
-                    <strong>{money(product.price * quantity)}</strong>
+            {categories.map((categoryName, categoryIndex) => (
+              <section
+                className="category-section"
+                id={`category-${categoryIndex}`}
+                data-category={categoryName}
+                key={categoryName}
+              >
+                <div className="table-wrap">
+                  <div className="table-title">
+                    <CategoryIcon category={categoryName} />
+                    <strong>{categoryName}</strong>
                   </div>
-                );
-              })}
-            </div>
+                  <div className="table-head">
+                    <span>No.</span>
+                    <span>Product Name</span>
+                    <span>Price</span>
+                    <span>Quantity</span>
+                    <span>Total</span>
+                  </div>
+                  {products.filter((product) => product.category === categoryName).map((product) => {
+                    const quantity = cart.find((item) => item.id === product.id)?.quantity || 0;
+                    return (
+                      <div className="product-row" key={product.id}>
+                        <span>#{product.id}</span>
+                        <div className="product-name">
+                          <div className="product-photo" style={{ backgroundImage: `url(${product.image})` }} />
+                          <div className="product-details">
+                            <strong>{product.name}</strong>
+                            {product.pack && <small>{product.pack}</small>}
+                          </div>
+                        </div>
+                        <strong className="best-price">{money(product.price)}</strong>
+                        <div className="stepper">
+                          <button type="button" aria-label={`Decrease quantity for ${product.name}`} onClick={() => changeQuantity(product, -1)}>−</button>
+                          <input
+                            aria-label={`Quantity for ${product.name}`}
+                            type="number"
+                            min="0"
+                            value={quantity || ""}
+                            onChange={(event) => changeQuantity(product, Number(event.target.value || 0) - quantity)}
+                          />
+                          <button type="button" aria-label={`Increase quantity for ${product.name}`} onClick={() => changeQuantity(product, 1)}>+</button>
+                        </div>
+                        <strong>{money(product.price * quantity)}</strong>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </section>
         </main>
       )}
