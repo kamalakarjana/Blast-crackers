@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      const viewportMeta = document.querySelector('meta[name="viewport"]');
+      const setViewport = () => {
+        const isPhone = Math.min(screen.width, screen.height) <= 720;
+        const content = isPhone
+          ? "width=1024"
+          : "width=device-width, initial-scale=1.0";
+        if (viewportMeta.content !== content) viewportMeta.content = content;
+      };
+      setViewport();
+      window.addEventListener("orientationchange", setViewport);
+    </script>
     <title>crackers-website</title>
   </head>
   <body>
