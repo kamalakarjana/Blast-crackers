@@ -93,6 +93,20 @@ const rewardCopy = (tier: RewardTier) => [
 type CustomerRegistration = { name: string; phone: string; email: string; password: string; consented: boolean };
 type CustomerIdentity = { id: string; name: string; phone: string; email: string; welcomeOfferAvailable: boolean };
 type CustomerRecord = CustomerIdentity & { registeredAt: string; consentedAt: string };
+type CustomerOrder = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  items: CartItem[];
+  subtotal: number;
+  discount: number;
+  total: number;
+  status: string;
+  attemptedAt: string;
+  confirmedAt: string | null;
+};
 type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; email: string; password: string };
 function isCustomerRecord(value: unknown): value is CustomerRecord {
   if (!value || typeof value !== "object") return false;
@@ -391,6 +405,7 @@ function App() {
   const [view, setView] = useState<View>(() => viewForRoute());
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [pendingOrderId, setPendingOrderId] = useState("");
   const [customerDetailsOpen, setCustomerDetailsOpen] = useState(false);
   const [pendingPdfDownload, setPendingPdfDownload] = useState(false);
   const [authReturnTo, setAuthReturnTo] = useState<View>("shop");
@@ -612,8 +627,21 @@ function App() {
   const openAdmin = () => {
     navigate(adminAuthenticated ? "catalogue" : "admin-login");
   };
-  const startPayment = () => {
+  const startPayment = async () => {
+    if (!user || cart.length === 0) return;
     setPaymentError("");
+    try {
+      const response = await fetch("/api/customer-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cart, discount: activeOffer?.discount || 0 }),
+      });
+      const result = await readApiResult<{ orderId: string }>(response);
+      setPendingOrderId(result.orderId);
+    } catch (cause) {
+      setCartError(cause instanceof Error ? cause.message : "Your order could not be recorded.");
+      return;
+    }
     setPaymentOpen(true);
   };
   const requestPaymentLogin = () => {
@@ -702,12 +730,18 @@ function App() {
     }
   };
   const completePurchase = async () => {
+    if (!pendingOrderId) {
+      throw new Error("No pending order was found. Please restart checkout.");
+    }
+    const confirmResponse = await fetch(`/api/customer-orders/${pendingOrderId}/confirm`, { method: "POST" });
+    await readApiResult<{ confirmed: boolean }>(confirmResponse);
     if (activeOffer?.id === "welcome") {
       const response = await fetch("/api/customer-welcome-offer/redeem", { method: "POST" });
       await readApiResult<{ available: boolean }>(response);
       setUser((current) => current ? { ...current, welcomeOfferAvailable: false } : current);
     }
     setPaymentOpen(false);
+    setPendingOrderId("");
     setOrderCount((count) => count + 1);
     setCart([]);
     alert("Payment successful. Your order has been recorded.");
@@ -1481,54 +1515,174 @@ function RewardTierManager({
 
 function AdminCustomersPage({ onBack }: { onBack: () => void }) {
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
+  const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadCustomers = async () => {
+  const loadRecords = async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/customers");
-      const result = await readApiResult<{ customers?: unknown }>(response);
-      if (!Array.isArray(result.customers) || !result.customers.every(isCustomerRecord)) {
+      const [customerResponse, orderResponse] = await Promise.all([fetch("/api/customers"), fetch("/api/orders")]);
+      const customerResult = await readApiResult<{ customers?: unknown }>(customerResponse);
+      const orderResult = await readApiResult<{ orders?: unknown }>(orderResponse);
+      if (!Array.isArray(customerResult.customers) || !customerResult.customers.every(isCustomerRecord)) {
         throw new Error("The server returned invalid customer registration data.");
       }
-      if (!cancelled) setCustomers(result.customers);
+      if (!Array.isArray(orderResult.orders)) throw new Error("The server returned invalid order history.");
+      setCustomers(customerResult.customers);
+      setOrders(orderResult.orders as CustomerOrder[]);
     } catch (cause) {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : "Customer registrations could not be loaded.");
+      setError(cause instanceof Error ? cause.message : "Customer records and orders could not be loaded.");
     } finally {
-      if (!cancelled) setLoading(false);
+      setLoading(false);
     }
-    };
-    void loadCustomers();
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadRecords().catch((cause: unknown) => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : "Customer records could not be loaded.");
+    });
     return () => { cancelled = true; };
   }, []);
+
+  const resetEditor = () => {
+    setEditingId("");
+    setName("");
+    setPhone("");
+    setEmail("");
+  };
+  const editCustomer = (customer: CustomerRecord) => {
+    setEditingId(customer.id);
+    setName(customer.name);
+    setPhone(customer.phone);
+    setEmail(customer.email);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const saveCustomer = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const response = await fetch("/api/customers", {
+        method: editingId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", ...(editingId ? { "X-Customer-Id": editingId } : {}) },
+        body: JSON.stringify({ name, phone, email }),
+      });
+      await readApiResult<{ customer: CustomerRecord }>(response);
+      resetEditor();
+      await loadRecords();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Customer details could not be saved.");
+    }
+  };
+  const deleteCustomer = async (customer: CustomerRecord) => {
+    if (!window.confirm(`Remove ${customer.name}'s customer record? Their order history will remain in the archive.`)) return;
+    setError("");
+    try {
+      const response = await fetch("/api/customers", { method: "DELETE", headers: { "X-Customer-Id": customer.id } });
+      await readApiResult<{ deleted: boolean }>(response);
+      await loadRecords();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Customer record could not be removed.");
+    }
+  };
+  const downloadCsv = (filename: string, rows: string[][]) => {
+    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportCustomers = () => downloadCsv("SLV_Customers.csv", [
+    ["Name", "Phone", "Email", "Registered"],
+    ...customers.map((customer) => [customer.name, customer.phone, customer.email, customer.registeredAt]),
+  ]);
+  const exportOrders = () => downloadCsv("SLV_Customer_Orders.csv", [
+    ["Order ID", "Customer", "Phone", "Email", "Attempted at", "Status", "Subtotal", "Discount", "Total", "Item", "Quantity", "Unit price", "Line total"],
+    ...orders.flatMap((order) => order.items.map((item) => [
+      order.id, order.customerName, order.customerPhone, order.customerEmail, order.attemptedAt,
+      order.status, String(order.subtotal), String(order.discount), String(order.total),
+      item.name, String(item.quantity), String(item.price), String(item.price * item.quantity),
+    ])),
+  ]);
 
   return (
     <main className="admin-page">
       <button type="button" className="back-link" onClick={onBack}>← Back to admin dashboard</button>
       <div className="admin-top">
-        <div><p className="admin-kicker">SLV / CUSTOMER RECORDS</p><h1>Registered customers</h1><p>Contact details customers shared for order or enquiry follow-up.</p></div>
+        <div><p className="admin-kicker">SLV / CUSTOMER RECORDS</p><h1>Customers &amp; orders</h1><p>Manage contact records and review each customer's repeated order attempts.</p></div>
         <button type="button" className="save-product" onClick={onBack}>Admin dashboard</button>
       </div>
       {error && <p className="catalog-maker-error" role="alert">{error}</p>}
-      {loading ? <p className="offer-admin-note" role="status">Loading customer records...</p> : customers.length === 0 && !error
-        ? <section className="admin-products"><p>No customer accounts have registered yet.</p></section>
-        : <section className="admin-products customer-manager">
-          <div className="admin-products-head"><h2>Customer registrations</h2><span>{customers.length} records</span></div>
-          <p className="offer-admin-note">Keep these personal details private and use them only for the contact purpose customers agreed to.</p>
-          <div className="customer-list">
-            {[...customers].reverse().map((customer) => (
-              <article className="customer-row" key={customer.id}>
-                <div><strong>{customer.name}</strong><small>Registered {new Date(customer.registeredAt).toLocaleString("en-IN")}</small></div>
-                <a href={`tel:${customer.phone}`}>{customer.phone}</a>
-                <a href={`mailto:${customer.email}`}>{customer.email}</a>
+      <section className="admin-products customer-manager">
+        <div className="admin-products-head"><h2>{editingId ? "Update customer" : "Add customer"}</h2></div>
+        <form className="customer-editor" onSubmit={(event) => void saveCustomer(event)}>
+          <label>Name<input required minLength={2} maxLength={100} value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>10-digit phone<input required pattern="[0-9]{10}" maxLength={10} value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+          <label>Email<input required type="email" maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <div className="customer-editor-actions">
+            <button type="submit" className="save-product">{editingId ? "Save changes" : "Add customer"}</button>
+            {editingId && <button type="button" className="catalog-folder-button" onClick={resetEditor}>Cancel edit</button>}
+          </div>
+        </form>
+      </section>
+      <section className="admin-products customer-manager">
+        <div className="admin-products-head"><h2>Customer registrations</h2><span>{customers.length} customers · {orders.length} order attempts</span></div>
+        <p className="offer-admin-note">One customer account is identified by unique email. Each checkout attempt is retained as a separate order; confirmation here records the customer's confirmation, not independently verified payment.</p>
+        <div className="customer-export-actions">
+          <button type="button" className="catalog-folder-button" onClick={exportCustomers} disabled={!customers.length}>Download customers CSV</button>
+          <button type="button" className="catalog-folder-button" onClick={exportOrders} disabled={!orders.length}>Download order details CSV</button>
+        </div>
+        {loading ? <p className="offer-admin-note" role="status">Loading customer and order records...</p> : customers.length === 0
+          ? <p>No customer accounts have registered yet.</p>
+          : <div className="customer-list">
+            {[...customers].reverse().map((customer) => {
+              const customerOrders = orders.filter((order) => order.customerId === customer.id);
+              return (
+                <details className="customer-record" key={customer.id}>
+                  <summary>
+                    <span><strong>{customer.name}</strong><small>{customerOrders.length} orders · {money(customerOrders.reduce((sum, order) => sum + order.total, 0))} total attempted</small></span>
+                    <span>{customer.phone} · {customer.email}</span>
+                  </summary>
+                  <div className="customer-record-actions">
+                    <a href={`tel:${customer.phone}`}>Call customer</a>
+                    <a href={`mailto:${customer.email}`}>Email customer</a>
+                    <button type="button" onClick={() => editCustomer(customer)}>Edit</button>
+                    <button type="button" className="catalog-remove-photo" onClick={() => void deleteCustomer(customer)}>Remove</button>
+                  </div>
+                  <div className="customer-orders-list">
+                    {customerOrders.length ? customerOrders.map((order) => (
+                      <article className="customer-order-card" key={order.id}>
+                        <div><strong>{money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
+                        <p>Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
+                        <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                      </article>
+                    )) : <p className="offer-admin-note">No checkout attempts have been recorded for this customer.</p>}
+                  </div>
+                </details>
+              );
+            })}
+          </div>}
+        {orders.some((order) => !customers.some((customer) => customer.id === order.customerId)) && (
+          <section className="archived-orders">
+            <h3>Order history for removed customer records</h3>
+            {orders.filter((order) => !customers.some((customer) => customer.id === order.customerId)).map((order) => (
+              <article className="customer-order-card" key={order.id}>
+                <div><strong>{order.customerName} · {money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
+                <p>{order.customerPhone} · {order.customerEmail} · Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
+                <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
               </article>
             ))}
-          </div>
-        </section>}
+          </section>
+        )}
+      </section>
     </main>
   );
 }

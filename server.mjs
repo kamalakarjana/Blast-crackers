@@ -15,6 +15,7 @@ const manifestPath = resolve(storageDirectory, 'productImages.json');
 const rewardTiersPath = resolve(storageDirectory, 'rewardTiers.json');
 const customersPath = resolve(storageDirectory, 'customers.json');
 const cartsPath = resolve(storageDirectory, 'customerCarts.json');
+const ordersPath = resolve(storageDirectory, 'customerOrders.json');
 const sourceManifestPath = resolve(projectRoot, 'src', 'productImages.json');
 const sourceRewardTiersPath = resolve(projectRoot, 'src', 'rewardTiers.json');
 const uploadToken = process.env.PHOTO_UPLOAD_TOKEN || '';
@@ -223,7 +224,7 @@ async function handleCustomerAuth(request, response, action) {
     const passwordHash = await derivePassword(normalized.password, salt, passwordHashBytes);
     const timestamp = new Date().toISOString();
     customer = {
-      id: randomUUID(),
+      id: existingCustomer?.id || randomUUID(),
       name: normalized.name,
       phone: normalized.phone,
       email: normalized.email,
@@ -231,6 +232,7 @@ async function handleCustomerAuth(request, response, action) {
       passwordHash: passwordHash.toString('hex'),
       registeredAt: existingCustomer?.registeredAt || timestamp,
       consentedAt: timestamp,
+      welcomeOfferRedeemedAt: existingCustomer?.welcomeOfferRedeemedAt,
     };
     if (existingCustomerIndex >= 0) customers[existingCustomerIndex] = customer;
     else customers.push(customer);
@@ -300,10 +302,6 @@ async function handleAdminAuth(request, response, action) {
 }
 
 async function handleCustomersApi(request, response) {
-  if (request.method !== 'GET') {
-    sendJson(response, 405, { error: 'Use GET to view customer registrations.' });
-    return;
-  }
   if (!isSecureUpload(request)) {
     sendJson(response, 400, { error: 'Customer records require HTTPS or a local SSH tunnel.' });
     return;
@@ -313,11 +311,193 @@ async function handleCustomersApi(request, response) {
     return;
   }
   const customers = await readCustomers();
-  sendJson(response, 200, {
-    customers: customers.map(({ id, name, phone, email, registeredAt, consentedAt }) => ({
-      id, name, phone, email, registeredAt, consentedAt,
-    })),
-  });
+  if (request.method === 'GET') {
+    sendJson(response, 200, {
+      customers: customers.map(({ id, name, phone, email, registeredAt, consentedAt }) => ({
+        id, name, phone, email, registeredAt, consentedAt,
+      })),
+    });
+    return;
+  }
+  if (request.method !== 'POST' && request.method !== 'PUT' && request.method !== 'DELETE') {
+    sendJson(response, 405, { error: 'Use GET, POST, PUT, or DELETE to manage customers.' });
+    return;
+  }
+  let payload = {};
+  if (request.method === 'POST' || request.method === 'PUT') {
+    payload = await parseJsonBody(request, response, 'Customer details must be valid JSON.');
+    if (!payload) return;
+  }
+  if (request.method === 'POST') {
+    const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+    const phone = typeof payload.phone === 'string' ? payload.phone.trim() : '';
+    const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+    if (name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone) || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      sendJson(response, 400, { error: 'Enter a valid name, 10-digit mobile number, and email.' });
+      return;
+    }
+    if (customers.some((customer) => customer.email === email)) {
+      sendJson(response, 409, { error: 'A customer with this email already exists.' });
+      return;
+    }
+    const timestamp = new Date().toISOString();
+    const customer = { id: randomUUID(), name, phone, email, registeredAt: timestamp, consentedAt: timestamp };
+    customers.push(customer);
+    await saveCustomers(customers);
+    sendJson(response, 201, { customer });
+    return;
+  }
+  const customerId = request.headers['x-customer-id'];
+  if (typeof customerId !== 'string' || !customerId) {
+    sendJson(response, 400, { error: 'A customer ID is required.' });
+    return;
+  }
+  const index = customers.findIndex((customer) => customer.id === customerId);
+  if (index < 0) {
+    sendJson(response, 404, { error: 'Customer was not found.' });
+    return;
+  }
+  if (request.method === 'DELETE') {
+    customers.splice(index, 1);
+    await saveCustomers(customers);
+    let savedCarts = {};
+    try {
+      savedCarts = JSON.parse(await readFile(cartsPath, 'utf8'));
+      if (!savedCarts || typeof savedCarts !== 'object' || Array.isArray(savedCarts)) throw new Error('Saved customer carts are invalid.');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    delete savedCarts[customerId];
+    await mkdir(storageDirectory, { recursive: true });
+    await writeFile(cartsPath, `${JSON.stringify(savedCarts, null, 2)}\n`, 'utf8');
+    sendJson(response, 200, { deleted: true });
+    return;
+  }
+  const current = customers[index];
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const phone = typeof payload.phone === 'string' ? payload.phone.trim() : '';
+  const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  if (name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone) || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    sendJson(response, 400, { error: 'Enter a valid name, 10-digit mobile number, and email.' });
+    return;
+  }
+  if (customers.some((customer) => customer.id !== customerId && customer.email === email)) {
+    sendJson(response, 409, { error: 'Another customer already uses this email.' });
+    return;
+  }
+  customers[index] = { ...current, name, phone, email };
+  await saveCustomers(customers);
+  sendJson(response, 200, { customer: customers[index] });
+}
+
+async function readOrders() {
+  try {
+    const orders = JSON.parse(await readFile(ordersPath, 'utf8'));
+    if (!Array.isArray(orders) || orders.length > 100_000) throw new Error('Saved customer orders are invalid.');
+    return orders;
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function handleCustomerOrders(request, response) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Orders require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  const session = getSession(request, 'customer');
+  if (!session) {
+    sendJson(response, 401, { error: 'Sign in to manage orders.' });
+    return;
+  }
+  const customer = (await readCustomers()).find((item) => item.id === session.userId);
+  if (!customer) {
+    sendJson(response, 404, { error: 'Customer account was not found.' });
+    return;
+  }
+  if (request.method !== 'GET' && request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Use GET or POST for customer orders.' });
+    return;
+  }
+  const orders = await readOrders();
+  if (request.method === 'GET') {
+    sendJson(response, 200, { orders: orders.filter((order) => order.customerId === customer.id) });
+    return;
+  }
+  const payload = await parseJsonBody(request, response, 'Order details must be valid JSON.');
+  if (!payload) return;
+  const cart = normalizeCart(payload.cart);
+  if (!cart?.length) {
+    sendJson(response, 400, { error: 'An order must contain valid cart items.' });
+    return;
+  }
+  const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const discount = Number.isSafeInteger(payload.discount) ? Math.min(Math.max(payload.discount, 0), subtotal) : 0;
+  const order = {
+    id: randomUUID(),
+    customerId: customer.id,
+    customerName: customer.name,
+    customerEmail: customer.email,
+    customerPhone: customer.phone,
+    items: cart,
+    subtotal,
+    discount,
+    total: subtotal - discount,
+    status: 'attempted',
+    attemptedAt: new Date().toISOString(),
+    confirmedAt: null,
+  };
+  orders.push(order);
+  await mkdir(storageDirectory, { recursive: true });
+  const temporaryPath = `${ordersPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(orders, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, ordersPath);
+  sendJson(response, 201, { orderId: order.id, total: order.total });
+}
+
+async function handleConfirmCustomerOrder(request, response, orderId) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Orders require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Use POST to confirm the order status.' });
+    return;
+  }
+  const session = getSession(request, 'customer');
+  if (!session) {
+    sendJson(response, 401, { error: 'Sign in to update the order.' });
+    return;
+  }
+  const orders = await readOrders();
+  const order = orders.find((item) => item.id === orderId && item.customerId === session.userId);
+  if (!order) {
+    sendJson(response, 404, { error: 'Order was not found.' });
+    return;
+  }
+  order.status = 'customer-confirmed';
+  order.confirmedAt ||= new Date().toISOString();
+  const temporaryPath = `${ordersPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(orders, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, ordersPath);
+  sendJson(response, 200, { confirmed: true });
+}
+
+async function handleAdminOrders(request, response) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Orders require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (!getSession(request, 'admin')) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to view orders.' });
+    return;
+  }
+  if (request.method !== 'GET') {
+    sendJson(response, 405, { error: 'Use GET to view orders.' });
+    return;
+  }
+  sendJson(response, 200, { orders: await readOrders() });
 }
 
 function normalizeCart(value) {
@@ -684,6 +864,19 @@ const requestHandler = async (request, response) => {
     }
     if (url.pathname === '/api/customers') {
       await handleCustomersApi(request, response);
+      return;
+    }
+    if (url.pathname === '/api/orders') {
+      await handleAdminOrders(request, response);
+      return;
+    }
+    if (url.pathname === '/api/customer-orders') {
+      await handleCustomerOrders(request, response);
+      return;
+    }
+    const confirmOrderMatch = /^\/api\/customer-orders\/([0-9a-f-]{36})\/confirm$/i.exec(url.pathname);
+    if (confirmOrderMatch) {
+      await handleConfirmCustomerOrder(request, response, confirmOrderMatch[1]);
       return;
     }
     if (url.pathname === '/api/auth/register' || url.pathname === '/api/auth/login' || url.pathname === '/api/auth/session' || url.pathname === '/api/auth/logout') {

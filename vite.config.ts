@@ -82,7 +82,7 @@ function productImageWriter(): Plugin {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
         const authPath = url.pathname === '/api/customers'
-          || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem)$/.test(url.pathname);
+          || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem|customer-orders(?:\/[0-9a-f-]{36}\/confirm)?|orders)$/.test(url.pathname);
         if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/customers' && !authPath) {
           next();
           return;
@@ -103,6 +103,7 @@ function productImageWriter(): Plugin {
         const dataDirectory = resolve(process.env.PHOTO_STORAGE_DIR || resolve(root, 'data'));
         const customersPath = resolve(dataDirectory, 'customers.json');
         const cartsPath = resolve(dataDirectory, 'customerCarts.json');
+        const ordersPath = resolve(dataDirectory, 'customerOrders.json');
 
         const sendUnauthorized = (message: string) => sendJson(401, { error: message });
         const currentSession = (kind: 'customer' | 'admin') => {
@@ -168,17 +169,176 @@ function productImageWriter(): Plugin {
                 sendJson(200, { signedOut: true });
                 return;
               }
-              if (url.pathname === '/api/customers' && request.method === 'GET') {
+              if (url.pathname === '/api/customers') {
                 if (!currentSession('admin')) {
                   sendUnauthorized('Sign in as the administrator to view customer records.');
                   return;
                 }
                 const customers = await readCustomers();
-                sendJson(200, {
-                  customers: customers.map(({ id, name, phone, email, registeredAt, consentedAt }) => ({
-                    id, name, phone, email, registeredAt, consentedAt,
-                  })),
-                });
+                if (request.method === 'GET') {
+                  sendJson(200, { customers: customers.map(({ id, name, phone, email, registeredAt, consentedAt }) => ({ id, name, phone, email, registeredAt, consentedAt })) });
+                  return;
+                }
+                let input: Record<string, unknown> = {};
+                if (request.method === 'POST' || request.method === 'PUT') {
+                  const payload: unknown = await parseRequestJson(request);
+                  input = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+                }
+                const name = typeof input.name === 'string' ? input.name.trim() : '';
+                const phone = typeof input.phone === 'string' ? input.phone.trim() : '';
+                const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+                if (request.method === 'POST') {
+                  if (name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone) || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    sendJson(400, { error: 'Enter a valid name, 10-digit mobile number, and email.' });
+                    return;
+                  }
+                  if (customers.some((customer) => customer.email === email)) {
+                    sendJson(409, { error: 'A customer with this email already exists.' });
+                    return;
+                  }
+                  const timestamp = new Date().toISOString();
+                  const customer = { id: randomUUID(), name, phone, email, registeredAt: timestamp, consentedAt: timestamp };
+                  customers.push(customer);
+                  await saveJson(customersPath, customers);
+                  sendJson(201, { customer });
+                  return;
+                }
+                const customerId = request.headers['x-customer-id'];
+                const index = customers.findIndex((customer) => customer.id === customerId);
+                if (typeof customerId !== 'string' || index < 0) {
+                  sendJson(404, { error: 'Customer was not found.' });
+                  return;
+                }
+                if (request.method === 'DELETE') {
+                  customers.splice(index, 1);
+                  await saveJson(customersPath, customers);
+                  let savedCarts: Record<string, unknown> = {};
+                  try {
+                    const saved: unknown = JSON.parse(await readFile(cartsPath, 'utf8'));
+                    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('Saved carts are invalid.');
+                    savedCarts = saved as Record<string, unknown>;
+                  } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                  }
+                  delete savedCarts[customerId];
+                  await saveJson(cartsPath, savedCarts);
+                  sendJson(200, { deleted: true });
+                  return;
+                }
+                if (request.method !== 'PUT') {
+                  sendJson(405, { error: 'Use GET, POST, PUT, or DELETE to manage customers.' });
+                  return;
+                }
+                if (name.length < 2 || name.length > 100 || !/^[0-9]{10}$/.test(phone) || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                  sendJson(400, { error: 'Enter a valid name, 10-digit mobile number, and email.' });
+                  return;
+                }
+                if (customers.some((customer) => customer.id !== customerId && customer.email === email)) {
+                  sendJson(409, { error: 'Another customer already uses this email.' });
+                  return;
+                }
+                customers[index] = { ...customers[index], name, phone, email };
+                await saveJson(customersPath, customers);
+                sendJson(200, { customer: customers[index] });
+                return;
+              }
+              if (url.pathname === '/api/customer-orders' && request.method === 'POST') {
+                const session = currentSession('customer');
+                if (!session) {
+                  sendUnauthorized('Sign in to record an order attempt.');
+                  return;
+                }
+                const customers = await readCustomers();
+                const customer = customers.find((item) => item.id === session.userId);
+                if (!customer) {
+                  sendJson(404, { error: 'Customer account was not found.' });
+                  return;
+                }
+                const payload: unknown = await parseRequestJson(request);
+                const input = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
+                const cart = input.cart;
+                if (!Array.isArray(cart) || !cart.length || cart.length > 200 || cart.some((item) => {
+                  if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
+                  const product = item as Record<string, unknown>;
+                  return !Number.isSafeInteger(product.id) || typeof product.name !== 'string'
+                    || !Number.isSafeInteger(product.price) || Number(product.price) < 0
+                    || !Number.isSafeInteger(product.quantity) || Number(product.quantity) < 1;
+                })) {
+                  sendJson(400, { error: 'An order must contain valid cart items.' });
+                  return;
+                }
+                const subtotal = cart.reduce((sum, item) => {
+                  const product = item as Record<string, unknown>;
+                  return sum + Number(product.price) * Number(product.quantity);
+                }, 0);
+                const discount = Number.isSafeInteger(input.discount) ? Math.min(Math.max(Number(input.discount), 0), subtotal) : 0;
+                let orders: Record<string, unknown>[] = [];
+                try {
+                  const saved: unknown = JSON.parse(await readFile(ordersPath, 'utf8'));
+                  if (!Array.isArray(saved)) throw new Error('Saved orders are invalid.');
+                  orders = saved as Record<string, unknown>[];
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                }
+                const order = {
+                  id: randomUUID(), customerId: customer.id, customerName: customer.name,
+                  customerEmail: customer.email, customerPhone: customer.phone, items: cart,
+                  subtotal, discount, total: subtotal - discount, status: 'attempted',
+                  attemptedAt: new Date().toISOString(), confirmedAt: null,
+                };
+                orders.push(order);
+                await saveJson(ordersPath, orders);
+                sendJson(201, { orderId: order.id, total: order.total });
+                return;
+              }
+              if (url.pathname === '/api/orders') {
+                if (!currentSession('admin')) {
+                  sendUnauthorized('Sign in as the administrator to view orders.');
+                  return;
+                }
+                if (request.method !== 'GET') {
+                  sendJson(405, { error: 'Use GET to view orders.' });
+                  return;
+                }
+                let orders: unknown[] = [];
+                try {
+                  const saved: unknown = JSON.parse(await readFile(ordersPath, 'utf8'));
+                  if (!Array.isArray(saved)) throw new Error('Saved orders are invalid.');
+                  orders = saved;
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                }
+                sendJson(200, { orders });
+                return;
+              }
+              if (url.pathname === '/api/customer-orders' || url.pathname.startsWith('/api/customer-orders/')) {
+                const session = currentSession('customer');
+                if (!session) {
+                  sendUnauthorized('Sign in to access your orders.');
+                  return;
+                }
+                let orders: Record<string, unknown>[] = [];
+                try {
+                  const saved: unknown = JSON.parse(await readFile(ordersPath, 'utf8'));
+                  if (!Array.isArray(saved)) throw new Error('Saved orders are invalid.');
+                  orders = saved as Record<string, unknown>[];
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                }
+                if (url.pathname === '/api/customer-orders' && request.method === 'GET') {
+                  sendJson(200, { orders: orders.filter((order) => order.customerId === session.userId) });
+                  return;
+                }
+                const confirmMatch = /^\/api\/customer-orders\/([0-9a-f-]{36})\/confirm$/i.exec(url.pathname);
+                const order = confirmMatch && orders.find((item) => item.id === confirmMatch[1] && item.customerId === session.userId);
+                if (request.method !== 'POST' || !order) {
+                  sendJson(order ? 405 : 404, { error: order ? 'Use POST to confirm the order.' : 'Order was not found.' });
+                  return;
+                }
+                order.status = 'customer-confirmed';
+                order.confirmedAt ||= new Date().toISOString();
+                await saveJson(ordersPath, orders);
+                sendJson(200, { confirmed: true });
                 return;
               }
               if (url.pathname === '/api/customer-cart') {
@@ -278,7 +438,7 @@ function productImageWriter(): Plugin {
                   const hash = await scrypt(password, salt, 64) as Buffer;
                   const timestamp = new Date().toISOString();
                   customer = {
-                    id: randomUUID(),
+                    id: typeof customer?.id === 'string' ? customer.id : randomUUID(),
                     name,
                     phone,
                     email,
@@ -286,6 +446,7 @@ function productImageWriter(): Plugin {
                     passwordHash: hash.toString('hex'),
                     registeredAt: typeof customer?.registeredAt === 'string' ? customer.registeredAt : timestamp,
                     consentedAt: timestamp,
+                    welcomeOfferRedeemedAt: customer?.welcomeOfferRedeemedAt,
                   };
                   if (customers.some((item) => item.email === email)) {
                     const index = customers.findIndex((item) => item.email === email);
