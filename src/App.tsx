@@ -36,6 +36,22 @@ const seed: Product[] = crackerCatalog.map((item, index) => ({
   image: productImagePaths[String(index + 1)] ?? "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
 }));
 const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
+const categoryIconByName: Record<string, string> = {
+  "Sparklers": "sparkler",
+  "Twinkling Stars": "star",
+  "Children's Special": "toy",
+  "Flower Pots": "flower",
+  "Ground Chakkar": "chakkar",
+  "Single Shot & Crackers": "sound",
+  "Wala Crackers": "garland",
+  "Atom Bombs": "bomb",
+  "Spinners": "spinner",
+  "Crackling": "spark",
+  "Rockets": "rocket",
+  "Fancy Items": "fancy",
+  "Shots": "shots",
+  "Family Packs": "gift",
+};
 const migrateFamilyPack = <T extends Product>(product: T): T => {
   const migrated = product.id === 100 && product.category === "Family Packs" && product.name === "40-Item Pack"
     ? { ...product, name: "45-Item Pack" }
@@ -289,6 +305,73 @@ function readStorage<T>(key: string, fallback: T): T {
     localStorage.removeItem(key);
     return fallback;
   }
+}
+
+function CategoryIcon({ category }: { category: string }) {
+  const icon = categoryIconByName[category] || "spark";
+  return (
+    <svg className="category-icon" viewBox="0 0 20 20" aria-hidden="true">
+      {icon === "sparkler" && <>
+        <path d="M6 17 12 8" />
+        <path d="m12 6 .7-3 .8 2.1 2.1-1.2-1.3 2.2 2.1.8-3 .5" />
+        <path d="m10 9-2-1m1 3-2-.3m4-3 .3-2" />
+      </>}
+      {icon === "star" && <>
+        <path d="m10 2 2 5.5 5.8.3-4.5 3.7 1.5 5.6-4.8-3-4.8 3 1.5-5.6-4.5-3.7 5.8-.3z" />
+        <path d="M10 0v1M2 4l1 1m14-1-1 1" />
+      </>}
+      {icon === "toy" && <>
+        <path d="M5 8V5l2 1 3-2 3 2 2-1v3" />
+        <path d="M4 8h12l1 7H3zM7 11h.1m5.8 0h.1M8 13h4" />
+      </>}
+      {icon === "flower" && <>
+        <path d="M10 9c-4-1-4-5-1.5-5.5C10 3.2 10 6 10 9Zm1 0c1-4 5-4 5.5-1.5C16.8 9 14 9 11 9Zm0 1c4 1 4 5 1.5 5.5C11 15.8 11 13 11 10Zm-1 0c-1 4-5 4-5.5 1.5C4.2 10 7 10 10 10Z" />
+        <circle cx="10.5" cy="9.5" r="1.5" />
+        <path d="M10 12v5m0-2-3 2m3-3 3 2" />
+      </>}
+      {icon === "chakkar" && <>
+        <circle cx="10" cy="10" r="5.5" />
+        <circle cx="10" cy="10" r="2" />
+        <path d="M10 1v3m0 12v3M1 10h3m12 0h3M3.6 3.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1" />
+      </>}
+      {icon === "sound" && <>
+        <path d="M3 8v4h3l4 3V5L6 8zM13 7a4 4 0 0 1 0 6m2-8a7 7 0 0 1 0 10" />
+      </>}
+      {icon === "garland" && <>
+        <path d="M3 6c2.5 0 2.5 8 5 8s2.5-8 5-8 2.5 8 5 8" />
+        <path d="m5 5 1-2m5 4 1-3m4 8 2-1M7 15l-1 2m8-3 1 3" />
+      </>}
+      {icon === "bomb" && <>
+        <path d="M6 7c0-2 2-3 4-3s4 1 4 3l2 2v6H4V9zM9 4l1-2 2 1 2-1" />
+        <path d="M7 10h.1m5.8 0h.1m-5 3h4" />
+      </>}
+      {icon === "spinner" && <>
+        <path d="M3 7a7 7 0 0 1 12-2l2 2m0-4v4h-4M17 13a7 7 0 0 1-12 2l-2-2m0 4v-4h4" />
+      </>}
+      {icon === "spark" && <>
+        <path d="m10 2 1.4 5.1L16 5l-2.1 4.6L19 11l-5.1 1.4L16 17l-4.6-2.1L10 20l-1.4-5.1L4 17l2.1-4.6L1 11l5.1-1.4L4 5l4.6 2.1z" />
+      </>}
+      {icon === "rocket" && <>
+        <path d="M11 12c3-2 5-5 5-9-4 0-7 2-9 5l-3 1-1 3 4-1 3 3-1 4 3-1z" />
+        <circle cx="12.5" cy="7.5" r="1.2" />
+        <path d="m5 14-2 2m4 1-2 1" />
+      </>}
+      {icon === "fancy" && <>
+        <path d="m10 2 1.7 5.2L17 5l-2.2 5 5.2 2-5.2 1.7L17 19l-5-2.2-2 5.2-1.7-5.2L3 19l2.2-5L0 12l5.2-1.7L3 5l5 2.2z" transform="translate(1 -1) scale(.9)" />
+        <circle cx="10" cy="10" r="1.5" />
+      </>}
+      {icon === "shots" && <>
+        <circle cx="10" cy="10" r="7" />
+        <circle cx="10" cy="10" r="4" />
+        <circle cx="10" cy="10" r="1" />
+        <path d="M10 1v2m9 7h-2M10 19v-2M1 10h2" />
+      </>}
+      {icon === "gift" && <>
+        <path d="M3 9h14v9H3zM2 6h16v3H2zM10 6v12" />
+        <path d="M10 6H7C4 6 5 2 7 3c2 0 3 3 3 3Zm0 0h3c3 0 2-4 0-3-2 0-3 3-3 3Z" />
+      </>}
+    </svg>
+  );
 }
 
 function App() {
@@ -677,31 +760,13 @@ function App() {
             <select value={category} onChange={(event) => setShopView(event.target.value)} aria-label="Choose category">
               {categories.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
-            {categories.map((item, index) => (
+            {categories.map((item) => (
               <button
                 className={category === item ? "category-active" : ""}
                 key={item}
                 onClick={() => setShopView(item)}
               >
-                <span>
-                  {
-                    [
-                      "♟",
-                      "☀",
-                      "☾",
-                      "➳",
-                      "✺",
-                      "◉",
-                      "◌",
-                      "♨",
-                      "➶",
-                      "➶",
-                      "✣",
-                      "▧",
-                      "⟳",
-                    ][index]
-                  }
-                </span>
+                <CategoryIcon category={item} />
                 {item}
               </button>
             ))}

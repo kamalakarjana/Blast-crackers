@@ -188,6 +188,10 @@
 .info-call-link { display: inline-block; text-decoration: none; }
 @media (max-width: 720px) { .customer-row { grid-template-columns: 1fr; gap: 7px; }.customer-load-button { width: 100%; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.category-panel button { gap: 9px; padding: 6px 5px; font-size: 13px; }
+.category-icon { flex: 0 0 18px; width: 18px; height: 18px; fill: none; stroke: #ff6b2f; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
+.category-panel .category-active .category-icon { stroke: var(--green); }
+@media (max-width: 720px) { .category-panel button { gap: 5px; padding: 7px 10px; font-size: 12px; }.category-icon { flex-basis: 16px; width: 16px; height: 16px; } }
 @media (max-width: 720px) { .reward-progress-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.reward-tier-admin-actions { align-items: stretch; flex-direction: column; }.reward-tier-admin-actions .save-product { width: 100%; }.reward-token-label input { width: 100%; }.admin-actions { flex-wrap: wrap; } }
 .table-head, .product-row { grid-template-columns: 48px minmax(0, 1fr) 82px 150px 85px; }
 .product-photo { flex: 0 0 59px; background-position: center; background-repeat: no-repeat; background-size: contain; }
@@ -195,6 +199,9 @@
 .product-details { display: grid; min-width: 0; gap: 4px; text-align: left; }
 .product-details strong { overflow-wrap: anywhere; }
 .product-details small { overflow: hidden; color: #758198; font-size: 11px; text-overflow: ellipsis; }
+.product-row .product-name { display: grid; grid-template-columns: 64px minmax(0, 1fr); justify-content: stretch; gap: 12px; text-align: left; }
+.product-row .product-name .product-photo { margin: 0 auto; }
+.product-row .product-details { text-align: left; }
 .stepper { min-width: 132px; height: 40px; }
 .stepper button { display: grid; flex: 0 0 38px; place-items: center; width: 38px; padding: 0; font-family: Arial, sans-serif; font-size: 22px; font-weight: 500; line-height: 1; }
 .stepper button:first-child { color: #596980; }
