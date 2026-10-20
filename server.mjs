@@ -91,7 +91,13 @@ function createSession(kind, userId = '') {
 }
 
 function sessionUser(customer) {
-  return { id: customer.id, name: customer.name, phone: customer.phone, email: customer.email };
+  return {
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone,
+    email: customer.email,
+    welcomeOfferAvailable: !customer.welcomeOfferRedeemedAt,
+  };
 }
 
 function isAuthorized(request) {
@@ -520,6 +526,33 @@ async function serveStatic(response, pathname) {
   }
 }
 
+async function handleWelcomeOfferRedemption(request, response) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Welcome offers require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (request.method !== 'POST') {
+    sendJson(response, 405, { error: 'Use POST to redeem the welcome offer.' });
+    return;
+  }
+  const session = getSession(request, 'customer');
+  if (!session) {
+    sendJson(response, 401, { error: 'Sign in to redeem the welcome offer.' });
+    return;
+  }
+  const customers = await readCustomers();
+  const customer = customers.find((item) => item.id === session.userId);
+  if (!customer) {
+    sendJson(response, 404, { error: 'Customer account was not found.' });
+    return;
+  }
+  if (!customer.welcomeOfferRedeemedAt) {
+    customer.welcomeOfferRedeemedAt = new Date().toISOString();
+    await saveCustomers(customers);
+  }
+  sendJson(response, 200, { available: false });
+}
+
 async function handleImageApi(request, response, url) {
   if (request.method === 'GET') {
     sendJson(response, 200, await getPublicImages());
@@ -663,6 +696,10 @@ const requestHandler = async (request, response) => {
     }
     if (url.pathname === '/api/customer-cart') {
       await handleCustomerCart(request, response);
+      return;
+    }
+    if (url.pathname === '/api/customer-welcome-offer/redeem') {
+      await handleWelcomeOfferRedemption(request, response);
       return;
     }
     if (request.method !== 'GET' && request.method !== 'HEAD') {

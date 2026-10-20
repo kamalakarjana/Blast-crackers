@@ -82,7 +82,7 @@ function productImageWriter(): Plugin {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://localhost');
         const authPath = url.pathname === '/api/customers'
-          || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart)$/.test(url.pathname);
+          || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem)$/.test(url.pathname);
         if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/customers' && !authPath) {
           next();
           return;
@@ -150,7 +150,13 @@ function productImageWriter(): Plugin {
                 else {
                   const customers = session ? await readCustomers() : [];
                   const customer = customers.find((item) => item.id === session?.userId);
-                  sendJson(200, { user: customer ? { id: customer.id, name: customer.name, phone: customer.phone, email: customer.email } : null });
+                  sendJson(200, { user: customer ? {
+                    id: customer.id,
+                    name: customer.name,
+                    phone: customer.phone,
+                    email: customer.email,
+                    welcomeOfferAvailable: !customer.welcomeOfferRedeemedAt,
+                  } : null });
                 }
                 return;
               }
@@ -221,6 +227,29 @@ function productImageWriter(): Plugin {
                 sendJson(200, { saved: true });
                 return;
               }
+              if (url.pathname === '/api/customer-welcome-offer/redeem') {
+                if (request.method !== 'POST') {
+                  sendJson(405, { error: 'Use POST to redeem the welcome offer.' });
+                  return;
+                }
+                const session = currentSession('customer');
+                if (!session) {
+                  sendUnauthorized('Sign in to redeem the welcome offer.');
+                  return;
+                }
+                const customers = await readCustomers();
+                const customer = customers.find((item) => item.id === session.userId);
+                if (!customer) {
+                  sendJson(404, { error: 'Customer account was not found.' });
+                  return;
+                }
+                if (!customer.welcomeOfferRedeemedAt) {
+                  customer.welcomeOfferRedeemedAt = new Date().toISOString();
+                  await saveJson(customersPath, customers);
+                }
+                sendJson(200, { available: false });
+                return;
+              }
               if ((url.pathname === '/api/auth/register' || url.pathname === '/api/auth/login') && request.method === 'POST') {
                 const payload: unknown = await parseRequestJson(request);
                 const input = payload && typeof payload === 'object' && !Array.isArray(payload)
@@ -288,7 +317,13 @@ function productImageWriter(): Plugin {
                 sessions.set(token, { kind: 'customer', userId: String(customer?.id), expiresAt: Date.now() + sessionLifetimeMs });
                 setSessionCookie('customer', token);
                 sendJson(url.pathname.endsWith('/register') ? 201 : 200, {
-                  user: { id: customer?.id, name: customer?.name, phone: customer?.phone, email: customer?.email },
+                  user: {
+                    id: customer?.id,
+                    name: customer?.name,
+                    phone: customer?.phone,
+                    email: customer?.email,
+                    welcomeOfferAvailable: !customer?.welcomeOfferRedeemedAt,
+                  },
                 });
                 return;
               }

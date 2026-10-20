@@ -19,7 +19,7 @@ type Product = {
 type CartItem = Product & { quantity: number };
 type OrderSelection = { product: Product; quantity: number };
 type Offer = {
-  id: "repeat-order";
+  id: "repeat-order" | "welcome";
   title: string;
   description: string;
   threshold: number;
@@ -32,14 +32,16 @@ const seed: Product[] = crackerCatalog.map((item, index) => ({
   name: item.name,
   category: item.category,
   price: parsePrice(item.price),
-  pack: "As per product listing",
+  pack: "",
   image: productImagePaths[String(index + 1)] ?? "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
 }));
 const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
-const migrateFamilyPack = <T extends Product>(product: T): T =>
-  product.id === 100 && product.category === "Family Packs" && product.name === "40-Item Pack"
+const migrateFamilyPack = <T extends Product>(product: T): T => {
+  const migrated = product.id === 100 && product.category === "Family Packs" && product.name === "40-Item Pack"
     ? { ...product, name: "45-Item Pack" }
     : product;
+  return migrated.pack === "As per product listing" ? { ...migrated, pack: "" } : migrated;
+};
 const getInitialProducts = () => {
   const saved = readStorage<Product[]>("blast-products", []);
   const pdfCategories = new Set(defaultCategories);
@@ -60,13 +62,20 @@ const getEarnedRewards = (tiers: RewardTier[], subtotal: number) =>
   tiers
     .filter((tier) => tier.enabled && tier.threshold <= subtotal)
     .sort((left, right) => left.threshold - right.threshold);
+const getApplicableOffer = (subtotal: number, customer: CustomerIdentity | null, offers: Offer[], orderCount: number) => {
+  if (subtotal <= 0) return undefined;
+  const offer = customer?.welcomeOfferAvailable
+    ? { id: "welcome" as const, title: "Welcome offer", description: "₹50 off your first order.", threshold: 0, discount: 50, enabled: true }
+    : offers.find((item) => item.enabled && subtotal >= item.threshold && orderCount > 0);
+  return offer ? { ...offer, discount: Math.min(offer.discount, subtotal) } : undefined;
+};
 const rewardCopy = (tier: RewardTier) => [
   tier.candleValue > 0 ? `₹${tier.candleValue} candle gift` : "",
   tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
   tier.bonusPack,
 ].filter(Boolean).join(" + ");
 type CustomerRegistration = { name: string; phone: string; email: string; password: string; consented: boolean };
-type CustomerIdentity = { id: string; name: string; phone: string; email: string };
+type CustomerIdentity = { id: string; name: string; phone: string; email: string; welcomeOfferAvailable: boolean };
 type CustomerRecord = CustomerIdentity & { registeredAt: string; consentedAt: string };
 type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; email: string; password: string };
 function isCustomerRecord(value: unknown): value is CustomerRecord {
@@ -180,8 +189,8 @@ const downloadCartPdf = (
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(8);
     const productLines = pdf.splitTextToSize(pdfText(item.name), columnWidths[1] - 5);
-    const packLines = pdf.splitTextToSize(pdfText(item.pack), columnWidths[1] - 5);
-    const rowHeight = Math.max(11, productLines.length * 4 + packLines.length * 3 + 4);
+    const packLines = item.pack ? pdf.splitTextToSize(pdfText(item.pack), columnWidths[1] - 5) : [];
+    const rowHeight = Math.max(9, productLines.length * 4 + packLines.length * 3 + 4);
     if (y + rowHeight > pageHeight - 18) startNewPage();
     const background = index % 2 === 0 ? colors.white : colors.stripe;
     pdf.setDrawColor(...colors.grid as [number, number, number]);
@@ -198,10 +207,12 @@ const downloadCartPdf = (
     pdf.setFontSize(8);
     pdf.setTextColor(...colors.ink as [number, number, number]);
     pdf.text(productLines, columnX[1] + 2, y + 4.5);
-    pdf.setFont("helvetica", "normal");
-    pdf.setFontSize(6.5);
-    pdf.setTextColor(...colors.muted as [number, number, number]);
-    pdf.text(packLines, columnX[1] + 2, y + 4.5 + productLines.length * 4);
+    if (packLines.length) {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(6.5);
+      pdf.setTextColor(...colors.muted as [number, number, number]);
+      pdf.text(packLines, columnX[1] + 2, y + 4.5 + productLines.length * 4);
+    }
     pdf.setTextColor(...colors.ink as [number, number, number]);
     pdf.setFontSize(7.5);
     pdf.text(String(item.quantity), columnX[2] + columnWidths[2] - 2, y + 5.2, { align: "right" });
@@ -296,6 +307,9 @@ function App() {
   });
   const [view, setView] = useState<View>(() => viewForRoute());
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [customerDetailsOpen, setCustomerDetailsOpen] = useState(false);
+  const [pendingPdfDownload, setPendingPdfDownload] = useState(false);
   const [authReturnTo, setAuthReturnTo] = useState<View>("shop");
   const [user, setUser] = useState<CustomerIdentity | null>(null);
   const [adminAuthenticated, setAdminAuthenticated] = useState(false);
@@ -430,7 +444,7 @@ function App() {
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const activeOffer = offers.find((item) => item.enabled && subtotal >= item.threshold && orderCount > 0);
+  const activeOffer = getApplicableOffer(subtotal, user, offers, orderCount);
   const total = Math.max(0, subtotal - (activeOffer?.discount || 0));
   const earnedRewardTiers = getEarnedRewards(rewardTiers, subtotal);
   const rewardCandleValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.candleValue, 0);
@@ -473,14 +487,14 @@ function App() {
   }, []);
   useEffect(() => {
     if (!authStateReady) return;
-    const isAdminRoute = view === "catalogue" || view === "admin-customers";
+    const isAdminRoute = view === "catalogue" || view === "admin-customers" || view === "order-entry" || view === "pdf-builder";
     if (isAdminRoute && !adminAuthenticated) {
       window.history.replaceState({}, "", routeForView("admin-login"));
     } else if (view === "admin-login" && adminAuthenticated) {
       window.history.replaceState({}, "", routeForView("catalogue"));
     }
   }, [view, adminAuthenticated, authStateReady]);
-  const isAdminView = view === "catalogue" || view === "admin-customers";
+  const isAdminView = view === "catalogue" || view === "admin-customers" || view === "order-entry" || view === "pdf-builder";
   const renderedView: View = !authStateReady && isAdminView
     ? "admin-login"
     : isAdminView && !adminAuthenticated
@@ -491,10 +505,41 @@ function App() {
   const openAdmin = () => {
     navigate(adminAuthenticated ? "catalogue" : "admin-login");
   };
-  const startPayment = () => setPaymentOpen(true);
+  const startPayment = () => {
+    setPaymentError("");
+    setPaymentOpen(true);
+  };
   const requestPaymentLogin = () => {
     setAuthReturnTo("cart");
-    navigate("customer-auth");
+    setPendingPdfDownload(false);
+    setCustomerDetailsOpen(true);
+  };
+  const openCart = (promptForDetails = false) => {
+    navigate("cart");
+    if (authStateReady && !user && (cart.length > 0 || promptForDetails)) {
+      setAuthReturnTo("cart");
+      setPendingPdfDownload(false);
+      setCustomerDetailsOpen(true);
+    }
+  };
+  const downloadPdfAfterAuth = () => {
+    if (!user) {
+      setAuthReturnTo("cart");
+      setPendingPdfDownload(true);
+      setCustomerDetailsOpen(true);
+      return;
+    }
+    const rewardTiersEarned = getEarnedRewards(rewardTiers, subtotal);
+    const rewards = [
+      rewardTiersEarned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
+        ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
+        : "",
+      rewardTiersEarned.reduce((sum, tier) => sum + tier.crackerValue, 0) > 0
+        ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of crackers`
+        : "",
+      ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
+    ].filter(Boolean);
+    downloadCartPdf(cart, subtotal, total, activeOffer, rewards);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -508,7 +553,24 @@ function App() {
     setUser(identity);
     setCartError("");
     setCartReady(true);
+    setCustomerDetailsOpen(false);
     navigate(authReturnTo);
+    if (pendingPdfDownload) {
+      const cartSubtotal = restoredCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+      const customerOffer = getApplicableOffer(cartSubtotal, identity, offers, orderCount);
+      const earned = getEarnedRewards(rewardTiers, cartSubtotal);
+      const rewards = [
+        earned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
+          ? `${money(earned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
+          : "",
+        earned.reduce((sum, tier) => sum + tier.crackerValue, 0) > 0
+          ? `${money(earned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of crackers`
+          : "",
+        ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
+      ].filter(Boolean);
+      downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - (customerOffer?.discount || 0)), customerOffer, rewards);
+      setPendingPdfDownload(false);
+    }
   };
   const signOutCustomer = async () => {
     try {
@@ -532,7 +594,12 @@ function App() {
       setCartError(cause instanceof Error ? cause.message : "Admin sign out could not be completed.");
     }
   };
-  const completePurchase = () => {
+  const completePurchase = async () => {
+    if (activeOffer?.id === "welcome") {
+      const response = await fetch("/api/customer-welcome-offer/redeem", { method: "POST" });
+      await readApiResult<{ available: boolean }>(response);
+      setUser((current) => current ? { ...current, welcomeOfferAvailable: false } : current);
+    }
     setPaymentOpen(false);
     setOrderCount((count) => count + 1);
     setCart([]);
@@ -565,8 +632,6 @@ function App() {
             >
               Quick Enquiry
             </button>
-            <button onClick={() => navigate("order-entry")}>Order Entry</button>
-            <button className={renderedView === "pdf-builder" ? "nav-active" : ""} onClick={() => navigate("pdf-builder")}>PDF Catalog</button>
             <button onClick={() => setShopView("Sparklers")}>
               Crackers
             </button>
@@ -581,7 +646,7 @@ function App() {
             <button
               className="header-cart"
               aria-label="Open cart"
-              onClick={() => navigate("cart")}
+              onClick={() => openCart()}
             >
               🛒<b>{count}</b>
             </button>
@@ -656,7 +721,7 @@ function App() {
                   For exact offers, please use the quick enquiry option.
                 </p>
               </div>
-              <button className="mobile-cart" onClick={() => navigate("cart")}>
+              <button className="mobile-cart" onClick={() => openCart()}>
                 Cart ({count})
               </button>
             </div>
@@ -752,12 +817,13 @@ function App() {
           onBack={() => setShopView()}
           user={user !== null}
           onLogin={requestPaymentLogin}
+          onDownloadPdf={downloadPdfAfterAuth}
           onCheckout={startPayment}
         />
       )}
       {renderedView === "offers" && <OffersPage offers={offers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
       {renderedView === "order-entry" && (
-        <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); navigate("cart"); }} onCart={() => navigate("cart")} />
+        <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); openCart(true); }} onCart={() => openCart()} />
       )}
       {renderedView === "pdf-builder" && (
         <CatalogMaker
@@ -789,6 +855,7 @@ function App() {
             setRewardTiersError("");
           }}
           onWebsite={() => setShopView()}
+          onOrderEntry={() => navigate("order-entry")}
           onPhotoManagement={() => navigate("pdf-builder")}
           onCustomers={() => navigate("admin-customers")}
           onLogout={() => void signOutAdmin()}
@@ -802,7 +869,7 @@ function App() {
           <a className="whatsapp" aria-label="Call SLV Crackers" href="tel:+919000488963">☎</a>
           <button
             className="floating-cart"
-            onClick={() => navigate("cart")}
+            onClick={() => openCart()}
             aria-label="Open cart"
           >
             🛒<b>{count}</b>
@@ -816,7 +883,20 @@ function App() {
           <button onClick={openAdmin}>Shop management</button>
         )}
       </footer>
-      {paymentOpen && <PaymentModal total={total} onClose={() => setPaymentOpen(false)} onPaid={completePurchase} />}
+      {paymentOpen && <PaymentModal total={total} error={paymentError} onClose={() => setPaymentOpen(false)} onPaid={() => {
+        void completePurchase().catch((cause: unknown) => {
+          setPaymentError(cause instanceof Error ? cause.message : "Your order could not be recorded.");
+        });
+      }} />}
+      {customerDetailsOpen && (
+        <Auth
+          modal
+          initialMode="register"
+          onAuth={authenticate}
+          onBack={() => setCustomerDetailsOpen(false)}
+          onCancel={() => { setCustomerDetailsOpen(false); setPendingPdfDownload(false); }}
+        />
+      )}
     </div>
   );
 }
@@ -931,6 +1011,7 @@ function Cart({
   onBack,
   user,
   onLogin,
+  onDownloadPdf,
   onCheckout,
 }: {
   cart: CartItem[];
@@ -944,6 +1025,7 @@ function Cart({
   onBack: () => void;
   user: boolean;
   onLogin: () => void;
+  onDownloadPdf: () => void;
   onCheckout: () => void;
 }) {
   const earned = getEarnedRewards(rewardTiers, subtotal);
@@ -953,12 +1035,6 @@ function Cart({
   const nextTier = rewardTiers
     .filter((tier) => tier.enabled && tier.threshold > subtotal)
     .sort((left, right) => left.threshold - right.threshold)[0];
-  const cartRewards = [
-    earnedCandleValue > 0 ? `${money(earnedCandleValue)} worth of candles` : "",
-    earnedCrackerValue > 0 ? `${money(earnedCrackerValue)} worth of crackers` : "",
-    ...earnedBonusPacks,
-  ].filter(Boolean);
-
   return (
     <main className="cart-page">
       <button className="back-link" onClick={onBack}>
@@ -971,7 +1047,7 @@ function Cart({
         <button
           className="download-pdf"
           disabled={!cart.length}
-          onClick={() => downloadCartPdf(cart, subtotal, total, offer, cartRewards)}
+          onClick={onDownloadPdf}
         >
           Download PDF
         </button>
@@ -1001,9 +1077,7 @@ function Cart({
                 />
                 <div>
                   <strong>{item.name}</strong>
-                  <small>
-                    {money(item.price)} / {item.pack}
-                  </small>
+                  <small>{money(item.price)}{item.pack ? ` / ${item.pack}` : ""}</small>
                 </div>
                 <div className="stepper">
                   <button type="button" aria-label={`Decrease quantity for ${item.name}`} onClick={() => onChange(item, -1)}>−</button>
@@ -1050,11 +1124,17 @@ function Cart({
 function Auth({
   onBack,
   onAuth,
+  modal = false,
+  initialMode = "login",
+  onCancel,
 }: {
   onBack: () => void;
   onAuth: (input: AuthenticationInput) => Promise<void>;
+  modal?: boolean;
+  initialMode?: "login" | "register";
+  onCancel?: () => void;
 }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -1080,10 +1160,8 @@ function Auth({
       setSaving(false);
     }
   };
-  return (
-    <main className="account-page">
-      <button type="button" className="back-link" onClick={onBack}>← Back to shopping</button>
-      <form className="account-card" onSubmit={(event) => void submit(event)}>
+  const form = (
+      <form className={`account-card${modal ? " account-modal-card" : ""}`} onSubmit={(event) => void submit(event)}>
         <p className="admin-kicker">SLV CUSTOMER ACCOUNT</p>
         <h1>{mode === "login" ? "Sign in" : "Create your account"}</h1>
         <p>{mode === "login" ? "Sign in to continue checkout and restore your saved cart." : "Register once to save your cart and let us follow up on your enquiry."}</p>
@@ -1101,11 +1179,30 @@ function Auth({
           {mode === "login" ? "New customer? Create an account" : "Already registered? Sign in"}
         </button>
       </form>
+  );
+  if (modal) {
+    return (
+      <div className="modal-backdrop customer-details-backdrop">
+        <section className="customer-details-dialog" role="dialog" aria-modal="true" aria-label="Customer details and welcome offer">
+          {onCancel && <button type="button" className="close" onClick={onCancel} aria-label="Close customer details">×</button>}
+          <div className="customer-welcome-offer">
+            <strong>Welcome! Get ₹50 off your first order.</strong>
+            <span>Create your account once. Your details and offer eligibility are saved for your next sign-in.</span>
+          </div>
+          {form}
+        </section>
+      </div>
+    );
+  }
+  return (
+    <main className="account-page">
+      <button type="button" className="back-link" onClick={onBack}>← Back to shopping</button>
+      {form}
     </main>
   );
 }
 
-function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () => void; onPaid: () => void }) {
+function PaymentModal({ total, error, onClose, onPaid }: { total: number; error: string; onClose: () => void; onPaid: () => void }) {
   const upiId = "9000488963@ybl";
   const paymentUri = `upi://pay?pa=${upiId}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(paymentUri)}`;
@@ -1122,6 +1219,7 @@ function PaymentModal({ total, onClose, onPaid }: { total: number; onClose: () =
         <p className="payment-intro">Scan the QR code with any UPI app or use the UPI number below to complete your order.</p>
         <div className="qr-frame"><img src={qrCodeUrl} alt={`UPI payment QR code for ${money(total)}`} /></div>
         <div className="upi-row"><div><small>UPI number</small><strong>{upiId}</strong></div><button type="button" onClick={copyUpi}>Copy</button></div>
+        {error && <p className="form-error" role="alert">{error}</p>}
         <button className="payment-confirm" type="button" onClick={onPaid}>I have completed the payment</button>
         <small className="payment-note">Your order is recorded after you confirm the payment.</small>
       </section>
@@ -1369,6 +1467,7 @@ function Catalogue({
   rewardTiersError,
   onSaveRewardTiers,
   onWebsite,
+  onOrderEntry,
   onPhotoManagement,
   onCustomers,
   onLogout,
@@ -1382,6 +1481,7 @@ function Catalogue({
   rewardTiersError: string;
   onSaveRewardTiers: (tiers: RewardTier[]) => void;
   onWebsite: () => void;
+  onOrderEntry: () => void;
   onPhotoManagement: () => void;
   onCustomers: () => void;
   onLogout: () => void;
@@ -1425,6 +1525,7 @@ function Catalogue({
         </div>
         <div className="admin-actions">
           <button onClick={onWebsite}>View customer site</button>
+          <button onClick={onOrderEntry}>Order entry</button>
           <button onClick={onPhotoManagement}>Manage category photos</button>
           <button onClick={onCustomers}>Customer details</button>
           <button onClick={onLogout}>Sign out</button>
