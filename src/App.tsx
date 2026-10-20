@@ -789,7 +789,12 @@ function App() {
               aria-label="Open cart"
               onClick={() => openCart()}
             >
-              🛒<b>{count}</b>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M3 4h2l2.2 10.1a2 2 0 0 0 2 1.6h8.5a2 2 0 0 0 1.9-1.4L21 8H6" />
+                <circle cx="10" cy="20" r="1.3" />
+                <circle cx="18" cy="20" r="1.3" />
+              </svg>
+              <b>{count}</b>
             </button>
           </div>
         </header>
@@ -983,13 +988,29 @@ function App() {
       {renderedView === "contact" && <InfoPage kind="contact" onContact={() => navigate("contact")} />}
       {renderedView !== "admin-login" && renderedView !== "pdf-builder" && (
         <div className="floating-actions">
-          <a className="whatsapp" aria-label="Call SLV Crackers" href="tel:+919000488963">☎</a>
+          <a
+            className="whatsapp"
+            aria-label="Chat with SLV Crackers on WhatsApp"
+            href="https://wa.me/919000488963?text=Hello%20SLV%20Crackers%2C%20I%20would%20like%20to%20know%20more."
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M20.5 11.8a8.4 8.4 0 0 1-12.4 7.4L3 20.5l1.3-4.9a8.4 8.4 0 1 1 16.2-3.8Z" />
+              <path d="M8.5 8.1c.2-.4.4-.4.7-.4h.5c.2 0 .4.1.5.4l.7 1.7c.1.3.1.5-.1.7l-.5.6c-.2.2-.2.4-.1.6.5.9 1.2 1.6 2.1 2.1.2.1.4.1.6-.1l.7-.8c.2-.2.4-.3.7-.2l1.6.8c.3.1.4.3.4.5 0 .5-.3 1.3-.8 1.7-.5.5-1.2.7-1.9.6-1.1-.2-2.4-.8-3.7-1.9-1.1-1-2-2.3-2.3-3.4-.3-1.1 0-2.2.9-2.9Z" />
+            </svg>
+          </a>
           <button
             className="floating-cart"
             onClick={() => openCart()}
             aria-label="Open cart"
           >
-            🛒<b>{count}</b>
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 4h2l2.2 10.1a2 2 0 0 0 2 1.6h8.5a2 2 0 0 0 1.9-1.4L21 8H6" />
+              <circle cx="10" cy="20" r="1.3" />
+              <circle cx="18" cy="20" r="1.3" />
+            </svg>
+            <b>{count}</b>
           </button>
         </div>
       )}
