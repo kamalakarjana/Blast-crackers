@@ -1551,7 +1551,6 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [resetPasswordForId, setResetPasswordForId] = useState("");
   const [resetPassword, setResetPassword] = useState("");
   const [resetStatus, setResetStatus] = useState("");
 
@@ -1588,12 +1587,16 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
     setName("");
     setPhone("");
     setEmail("");
+    setResetPassword("");
+    setResetStatus("");
   };
   const editCustomer = (customer: CustomerRecord) => {
     setEditingId(customer.id);
     setName(customer.name);
     setPhone(customer.phone);
     setEmail(customer.email);
+    setResetPassword("");
+    setResetStatus("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const saveCustomer = async (event: FormEvent) => {
@@ -1681,11 +1684,20 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
             {editingId && <button type="button" className="catalog-folder-button" onClick={resetEditor}>Cancel edit</button>}
           </div>
         </form>
+        {editingId && <section className="customer-password-editor" aria-labelledby="customer-password-heading">
+          <div className="admin-products-head"><h3 id="customer-password-heading">Change customer password</h3></div>
+          <p className="offer-admin-note">Set a new password for {name}. Verify the customer's identity before sharing it. This will sign them out of existing sessions.</p>
+          <form className="customer-password-form" onSubmit={(event) => void updateCustomerPassword(event, editingId)}>
+            <label>New password<input required type="password" minLength={10} maxLength={128} autoComplete="new-password" value={resetPassword} onChange={(event) => { setResetPassword(event.target.value); setResetStatus(""); }} /></label>
+            <button type="submit" className="save-product">Change password</button>
+          </form>
+          {resetStatus && <p className="catalog-maker-status" role="status">{resetStatus}</p>}
+        </section>}
       </section>
       <section className="admin-products customer-manager">
         <div className="admin-products-head"><h2>Customer registrations</h2><span>{customers.length} customers · {orders.length} order attempts</span></div>
         <p className="offer-admin-note">One customer account is identified by unique email. Each checkout attempt is retained as a separate order; confirmation here records the customer's confirmation, not independently verified payment.</p>
-        <p className="offer-admin-note">For password reset requests, verify the customer using a previously known contact detail before setting a new password. Resetting signs the customer out of existing sessions.</p>
+        <p className="offer-admin-note">Select <strong>Edit</strong> on a customer to update their details or change their password. Verify the customer's identity before sharing a new password.</p>
         <div className="customer-export-actions">
           <button type="button" className="catalog-folder-button" onClick={exportCustomers} disabled={!customers.length}>Download customers CSV</button>
           <button type="button" className="catalog-folder-button" onClick={exportOrders} disabled={!orders.length}>Download order details CSV</button>
@@ -1705,14 +1717,8 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                     <a href={`tel:${customer.phone}`}>Call customer</a>
                     <a href={`mailto:${customer.email}`}>Email customer</a>
                     <button type="button" onClick={() => editCustomer(customer)}>Edit</button>
-                    <button type="button" onClick={() => { setResetPasswordForId(resetPasswordForId === customer.id ? "" : customer.id); setResetPassword(""); setResetStatus(""); }}>Reset password</button>
                     <button type="button" className="catalog-remove-photo" onClick={() => void deleteCustomer(customer)}>Remove</button>
                   </div>
-                  {resetPasswordForId === customer.id && !resetStatus && <form className="customer-editor" onSubmit={(event) => void updateCustomerPassword(event, customer.id)}>
-                    <label>New password<input required type="password" minLength={10} maxLength={128} autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} /></label>
-                    <div className="customer-editor-actions"><button type="submit" className="save-product">Set new password</button></div>
-                  </form>}
-                  {resetPasswordForId === customer.id && resetStatus && <p className="catalog-maker-status" role="status">{resetStatus}</p>}
                   <div className="customer-orders-list">
                     {customerOrders.length ? customerOrders.map((order) => (
                       <article className="customer-order-card" key={order.id}>

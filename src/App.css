@@ -199,6 +199,12 @@
 .customer-editor-actions, .customer-export-actions, .customer-record-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .customer-editor-actions { grid-column: 1 / -1; }
 .customer-editor-actions button, .customer-export-actions button { width: auto; min-height: 38px; padding: 9px 13px; }
+.customer-password-editor { margin-top: 22px; padding: 18px; border: 1px solid #d8e9dc; border-radius: 7px; background: #f7fbf8; }
+.customer-password-editor .admin-products-head h3 { margin: 0; color: var(--navy); }
+.customer-password-form { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: end; gap: 12px; max-width: 700px; }
+.customer-password-form label { display: grid; gap: 6px; color: #556479; font-size: 12px; font-weight: 700; }
+.customer-password-form input { width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid #d6dfe9; border-radius: 4px; }
+.customer-password-form .save-product { width: auto; min-height: 40px; padding: 9px 14px; }
 .customer-record { border-bottom: 1px solid #e6ebf0; }
 .customer-record > summary { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 15px 8px; cursor: pointer; }
 .customer-record > summary > span:first-child { display: grid; gap: 4px; }
@@ -213,7 +219,7 @@
 .customer-order-card ul { margin: 7px 0 0; padding-left: 20px; color: #536154; font-size: 12px; line-height: 1.6; }
 .archived-orders { display: grid; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid #dfe6df; }
 .archived-orders h3 { margin: 0; color: #46584a; font-size: 15px; }
-@media (max-width: 720px) { .customer-editor { grid-template-columns: 1fr; }.customer-editor-actions { grid-column: auto; }.customer-editor-actions button, .customer-export-actions button { width: 100%; }.customer-record > summary { align-items: flex-start; flex-direction: column; gap: 5px; } }
+@media (max-width: 720px) { .customer-editor { grid-template-columns: 1fr; }.customer-editor-actions { grid-column: auto; }.customer-editor-actions button, .customer-export-actions button, .customer-password-form .save-product { width: 100%; }.customer-password-form { grid-template-columns: 1fr; }.customer-record > summary { align-items: flex-start; flex-direction: column; gap: 5px; } }
 @media (max-width: 720px) { .reward-progress-heading { align-items: flex-start; flex-direction: column; gap: 5px; }.reward-tier-admin-actions { align-items: stretch; flex-direction: column; }.reward-tier-admin-actions .save-product { width: 100%; }.reward-token-label input { width: 100%; }.admin-actions { flex-wrap: wrap; } }
 .table-head, .product-row { grid-template-columns: 48px minmax(0, 1fr) 82px 150px 85px; }
 .product-photo { flex: 0 0 59px; background-position: center; background-repeat: no-repeat; background-size: contain; }
