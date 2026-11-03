@@ -654,6 +654,56 @@ function App() {
     return () => { cancelled = true; };
   }, []);
   useEffect(() => {
+    if (!productsReady || !authStateReady || adminAuthenticated) return;
+    let active = true;
+    let refreshing = false;
+    const refreshCatalogue = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const response = await fetch("/api/catalogue", { cache: "no-store" });
+        const result = await readApiResult<{ products: unknown; categoryOffers: unknown }>(response);
+        if (!isProductList(result.products) || !isCategoryOfferList(result.categoryOffers)) {
+          throw new Error("Saved catalogue or category offers from the server are invalid.");
+        }
+        if (!active) return;
+        const sharedProducts = result.products.map(migrateFamilyPack);
+        const sharedCategoryOffers = result.categoryOffers;
+        setProducts((current) => {
+          const next = [
+            ...current.filter((product) => seed.some((builtIn) => builtIn.id === product.id)),
+            ...sharedProducts,
+          ];
+          return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+        });
+        setCategoryOffers((current) =>
+          JSON.stringify(current) === JSON.stringify(sharedCategoryOffers) ? current : sharedCategoryOffers,
+        );
+        const requestedCategory = categoryFromRoute([...defaultCategories, ...result.products.map((product) => product.category)]);
+        if (requestedCategory) setCategory(requestedCategory);
+        setProductStorageError("");
+      } catch (cause) {
+        if (active) {
+          setProductStorageError(cause instanceof Error ? cause.message : "The catalogue could not be refreshed from the server.");
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshCatalogue();
+    };
+    const interval = window.setInterval(() => { void refreshCatalogue(); }, 15000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [productsReady, authStateReady, adminAuthenticated]);
+  useEffect(() => {
     let cancelled = false;
     void fetch("/api/product-images")
       .then(async (response) => {
