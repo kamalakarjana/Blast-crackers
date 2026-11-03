@@ -562,7 +562,6 @@ function App() {
   const [cartError, setCartError] = useState("");
   const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const processedCatalogueSaveRequest = useRef(0);
-  const savedCatalogue = useRef<{ products: Product[]; categoryOffers: CategoryOffer[] } | null>(null);
   const productImageCloseButton = useRef<HTMLButtonElement>(null);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
@@ -593,7 +592,6 @@ function App() {
       .then((result) => {
         if (cancelled) return;
         const publicProducts = mergeCatalogueProducts(result.products);
-        savedCatalogue.current = { products: publicProducts, categoryOffers: result.categoryOffers };
         setProducts(publicProducts);
         setCategoryOffers(result.categoryOffers);
         const requestedCategory = categoryFromRoute([...defaultCategories, ...result.products.map((product) => product.category)]);
@@ -633,7 +631,6 @@ function App() {
           throw new Error("The server returned an invalid saved catalogue.");
         }
         const sharedProducts = mergeCatalogueProducts(result.products);
-        savedCatalogue.current = { products: sharedProducts, categoryOffers: result.categoryOffers };
         setProducts((current) =>
           JSON.stringify(current) === JSON.stringify(sharedProducts) ? current : sharedProducts,
         );
@@ -642,12 +639,10 @@ function App() {
         setProductStorageError("");
         setCatalogueSaveStatus("Saved for all users.");
       }).catch((cause: unknown) => {
-        const message = cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.";
-        if (savedCatalogue.current) {
-          setProducts(savedCatalogue.current.products);
-          setCategoryOffers(savedCatalogue.current.categoryOffers);
-        }
-        setCatalogueApiReady(false);
+        const errorMessage = cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.";
+        const message = errorMessage === "Products and category offers must have valid unique IDs, names, prices, and discount percentages."
+          ? `${errorMessage} The server may be running an older version; deploy the latest server.mjs and restart the service. Your unsaved changes are still on this page.`
+          : errorMessage;
         setProductStorageError(message);
         setCatalogueSaveStatus(`Could not save: ${message}`);
       });
@@ -724,7 +719,6 @@ function App() {
         if (!active) return;
         const sharedProducts = mergeCatalogueProducts(result.products);
         const sharedCategoryOffers = result.categoryOffers;
-        savedCatalogue.current = { products: sharedProducts, categoryOffers: sharedCategoryOffers };
         setProducts((current) => {
           const next = sharedProducts;
           return JSON.stringify(current) === JSON.stringify(next) ? current : next;
