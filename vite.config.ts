@@ -38,7 +38,7 @@ function isCatalogueConfiguration(value: unknown): value is {
   for (const product of candidate.products) {
     if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
     const item = product as Record<string, unknown>;
-    if (!Number.isSafeInteger(item.id) || Number(item.id) <= 102 || Number(item.id) > 1_000_000 || productIds.has(Number(item.id))) return false;
+    if (!Number.isSafeInteger(item.id) || Number(item.id) < 1 || Number(item.id) > 1_000_000 || productIds.has(Number(item.id))) return false;
     if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 160) return false;
     if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100) return false;
     if (!Number.isSafeInteger(item.price) || Number(item.price) < 1 || Number(item.price) > 10_000_000) return false;

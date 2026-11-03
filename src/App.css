@@ -635,3 +635,79 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.product-photo-button {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+.product-photo-button .product-photo {
+  width: 59px;
+  height: 59px;
+  margin: 0;
+  transition: transform .18s ease;
+}
+.product-photo-button:hover .product-photo { transform: scale(1.06); }
+.product-photo-button:focus-visible, .product-image-link:focus-visible {
+  outline: 3px solid #18864b;
+  outline-offset: 3px;
+}
+.product-image-link {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 750;
+  text-align: left;
+}
+.product-image-link:hover { color: #18864b; }
+.product-image-backdrop { z-index: 20; }
+.product-image-dialog {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, .7fr);
+  width: min(900px, 100%);
+  max-height: min(90vh, 760px);
+  overflow: auto;
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 24px 80px #101b2b66;
+}
+.product-image-close { z-index: 1; }
+.product-image-large {
+  display: block;
+  width: 100%;
+  height: min(70vh, 650px);
+  min-height: 320px;
+  padding: 20px;
+  background: #f7f9f6;
+  object-fit: contain;
+}
+.product-image-caption {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  padding: 36px 28px;
+}
+.product-image-caption p { margin: 0; color: #18864b; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+.product-image-caption h2 { margin: 0; color: #20392b; font-size: 24px; }
+.product-image-caption span { color: var(--muted-ink); }
+.product-image-caption strong { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; color: #18864b; font-size: 20px; }
+.product-image-caption del { color: var(--muted-ink); font-size: 15px; font-weight: 500; }
+@media (max-width: 720px) {
+  .product-photo-button { width: 52px; height: 52px; }
+  .product-photo-button .product-photo { width: 48px; height: 48px; }
+  .product-image-backdrop { padding: 12px; }
+  .product-image-dialog { grid-template-columns: minmax(0, 1fr); max-height: calc(100dvh - 24px); }
+  .product-image-large { height: min(58dvh, 480px); min-height: 210px; padding: 16px; }
+  .product-image-caption { gap: 8px; padding: 16px 20px 20px; }
+  .product-image-caption h2 { font-size: 20px; }
+}

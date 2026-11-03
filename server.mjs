@@ -710,7 +710,7 @@ function isCatalogueConfiguration(value) {
   const productIds = new Set();
   for (const product of products) {
     if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
-    if (!Number.isSafeInteger(product.id) || product.id <= 102 || product.id > 1_000_000 || productIds.has(product.id)) return false;
+    if (!Number.isSafeInteger(product.id) || product.id < 1 || product.id > 1_000_000 || productIds.has(product.id)) return false;
     if (typeof product.name !== 'string' || !product.name.trim() || product.name.length > 160) return false;
     if (typeof product.category !== 'string' || !product.category.trim() || product.category.length > 100) return false;
     if (!Number.isSafeInteger(product.price) || product.price < 1 || product.price > 10_000_000) return false;

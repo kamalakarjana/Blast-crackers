@@ -105,6 +105,11 @@ const migrateFamilyPack = <T extends Product>(product: T): T => {
     : product;
   return migrated.pack === "As per product listing" ? { ...migrated, pack: "" } : migrated;
 };
+const mergeCatalogueProducts = (savedProducts: Product[]) => {
+  const productsById = new Map(seed.map((product) => [product.id, product]));
+  savedProducts.map(migrateFamilyPack).forEach((product) => productsById.set(product.id, product));
+  return [...productsById.values()];
+};
 const getInitialProducts = () => {
   const saved = readStorage<Product[]>("blast-products", []);
   const pdfCategories = new Set(defaultCategories);
@@ -525,6 +530,7 @@ function CategoryIcon({ category }: { category: string }) {
 
 function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productStorageError, setProductStorageError] = useState("");
   const [catalogueSaveStatus, setCatalogueSaveStatus] = useState("");
   const [catalogueSaveRequest, setCatalogueSaveRequest] = useState(0);
@@ -557,11 +563,21 @@ function App() {
   const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const processedCatalogueSaveRequest = useRef(0);
   const savedCatalogue = useRef<{ products: Product[]; categoryOffers: CategoryOffer[] } | null>(null);
+  const productImageCloseButton = useRef<HTMLButtonElement>(null);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
     cartSaveQueue.current = save.catch(() => undefined);
     return save;
   };
+  useEffect(() => {
+    if (!selectedProduct) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    productImageCloseButton.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selectedProduct]);
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/catalogue")
@@ -576,8 +592,7 @@ function App() {
       })
       .then((result) => {
         if (cancelled) return;
-        const sharedProducts = result.products.map(migrateFamilyPack);
-        const publicProducts = [...seed, ...sharedProducts];
+        const publicProducts = mergeCatalogueProducts(result.products);
         savedCatalogue.current = { products: publicProducts, categoryOffers: result.categoryOffers };
         setProducts(publicProducts);
         setCategoryOffers(result.categoryOffers);
@@ -602,8 +617,7 @@ function App() {
     if (saveImmediately) processedCatalogueSaveRequest.current = catalogueSaveRequest;
     const timer = window.setTimeout(() => {
       setCatalogueSaveStatus("Saving changes for all users...");
-      const savedProducts = products.filter((product) => !seed.some((builtIn) => builtIn.id === product.id));
-      void Promise.all(savedProducts.map(async (product) => {
+      void Promise.all(products.map(async (product) => {
         if (!product.image.startsWith("data:")) return product;
         const imageBlob = await (await fetch(product.image)).blob();
         const image = await prepareProductImage(new File([imageBlob], "product-image.jpg", { type: imageBlob.type || "image/jpeg" }));
@@ -618,15 +632,12 @@ function App() {
         if (!isProductList(result.products) || !isCategoryOfferList(result.categoryOffers)) {
           throw new Error("The server returned an invalid saved catalogue.");
         }
-        const sharedProducts = result.products.map(migrateFamilyPack);
-        savedCatalogue.current = { products: [...seed, ...sharedProducts], categoryOffers: result.categoryOffers };
+        const sharedProducts = mergeCatalogueProducts(result.products);
+        savedCatalogue.current = { products: sharedProducts, categoryOffers: result.categoryOffers };
+        setProducts((current) =>
+          JSON.stringify(current) === JSON.stringify(sharedProducts) ? current : sharedProducts,
+        );
         setCategoryOffers(result.categoryOffers);
-        if (compressedProducts.some((product, index) => product.image !== savedProducts[index].image)) {
-          setProducts((current) => current.map((product) => {
-            const saved = compressedProducts.find((item) => item.id === product.id);
-            return saved ? { ...product, image: saved.image } : product;
-          }));
-        }
         setCatalogueApiReady(true);
         setProductStorageError("");
         setCatalogueSaveStatus("Saved for all users.");
@@ -711,12 +722,11 @@ function App() {
           throw new Error("Saved catalogue or category offers from the server are invalid.");
         }
         if (!active) return;
-        const sharedProducts = result.products.map(migrateFamilyPack);
+        const sharedProducts = mergeCatalogueProducts(result.products);
         const sharedCategoryOffers = result.categoryOffers;
-        const publicProducts = [...seed, ...sharedProducts];
-        savedCatalogue.current = { products: publicProducts, categoryOffers: sharedCategoryOffers };
+        savedCatalogue.current = { products: sharedProducts, categoryOffers: sharedCategoryOffers };
         setProducts((current) => {
-          const next = publicProducts;
+          const next = sharedProducts;
           return JSON.stringify(current) === JSON.stringify(next) ? current : next;
         });
         setCategoryOffers((current) =>
@@ -1202,9 +1212,18 @@ function App() {
                       <div className="product-row" key={product.id}>
                         <span>#{product.id}</span>
                         <div className="product-name">
-                          <div className="product-photo" style={{ backgroundImage: `url(${product.image})` }} />
+                          <button
+                            type="button"
+                            className="product-photo-button"
+                            onClick={() => setSelectedProduct(product)}
+                            aria-label={`View image of ${product.name}`}
+                          >
+                            <span className="product-photo" style={{ backgroundImage: `url(${product.image})` }} />
+                          </button>
                           <div className="product-details">
-                            <strong>{product.name}</strong>
+                            <button type="button" className="product-image-link" onClick={() => setSelectedProduct(product)}>
+                              {product.name}
+                            </button>
                             {product.pack && <small>{product.pack}</small>}
                           </div>
                         </div>
@@ -1351,6 +1370,42 @@ function App() {
           onBack={() => setCustomerDetailsOpen(false)}
           onCancel={() => { setCustomerDetailsOpen(false); setPendingPdfDownload(false); }}
         />
+      )}
+      {selectedProduct && (
+        <div className="modal-backdrop product-image-backdrop" onClick={(event) => {
+          if (event.target === event.currentTarget) setSelectedProduct(null);
+        }}>
+          <section
+            className="product-image-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-image-title"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setSelectedProduct(null);
+            }}
+          >
+            <button
+              ref={productImageCloseButton}
+              type="button"
+              className="close product-image-close"
+              onClick={() => setSelectedProduct(null)}
+              aria-label="Close product image"
+            >
+              ×
+            </button>
+            <img className="product-image-large" src={selectedProduct.image} alt={selectedProduct.name} />
+            <div className="product-image-caption">
+              <p>{selectedProduct.category}</p>
+              <h2 id="product-image-title">{selectedProduct.name}</h2>
+              {selectedProduct.pack && <span>{selectedProduct.pack}</span>}
+              <strong>
+                {getProductOfferPrice(selectedProduct, categoryOffers) < selectedProduct.price
+                  ? <><del>{money(selectedProduct.price)}</del> {money(getProductOfferPrice(selectedProduct, categoryOffers))}</>
+                  : money(selectedProduct.price)}
+              </strong>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
@@ -2291,7 +2346,7 @@ function Catalogue({
               })}
               placeholder="Leave blank to use category offer"
             />
-            <small>0% means no discount. Any active item or category discount automatically excludes this product from target rewards.</small>
+            <small>0% means no discount. Discounted items count toward target rewards only when enabled for their category.</small>
           </label>
           <label>
             Upload product image
