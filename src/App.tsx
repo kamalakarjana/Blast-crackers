@@ -199,7 +199,7 @@ async function saveUploadedProductImage(productId: number, data: string): Promis
 }
 const rewardCopy = (tier: RewardTier) => [
   tier.candleValue > 0 ? `₹${tier.candleValue} candle gift` : "",
-  tier.crackerValue > 0 ? `₹${tier.crackerValue} fancy crackers gift` : "",
+  tier.crackerValue > 0 ? `₹${tier.crackerValue} fancy cracker gift` : "",
   tier.bonusPack,
 ].filter(Boolean).join(" + ");
 type CustomerRegistration = { name: string; phone: string; email: string; password: string; consented: boolean };
@@ -383,7 +383,12 @@ const downloadCartPdf = (
     ...(offer ? [{ label: offer.title, value: `-${pdfMoney(offer.discount)}` }] : []),
   ];
   const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${pdfText(reward)}`, pageWidth - margin * 2 - 4));
-  const rewardHeight = rewards.length ? 5 + rewardText.reduce((height, lines) => height + lines.length * 4.5, 0) : 0;
+  const rewardTermsText = rewards.length
+    ? pdf.splitTextToSize("Fancy cracker and candle gifts are gift values, not cash discounts. Terms and conditions apply.", pageWidth - margin * 2 - 4)
+    : [];
+  const rewardHeight = rewards.length
+    ? 5 + rewardText.reduce((height, lines) => height + lines.length * 4.5, 0) + 2 + rewardTermsText.length * 3.5
+    : 0;
   const summaryHeight = 7 + 6 + summaryLines.length * 7 + 16 + rewardHeight;
   if (y + summaryHeight > pageHeight - 18) startNewPage();
   y += 7;
@@ -423,6 +428,11 @@ const downloadCartPdf = (
       pdf.text(lines, margin + 2, y);
       y += lines.length * 4.5;
     });
+    y += 1;
+    pdf.setFont("helvetica", "italic");
+    pdf.setFontSize(6);
+    pdf.setTextColor(...colors.muted as [number, number, number]);
+    pdf.text(rewardTermsText, margin + 2, y);
   }
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
@@ -1578,7 +1588,7 @@ function Cart({
             {offer ? offer.description : "Check Offers for the qualifying purchase amount."}
           </p>
           {earnedCandleValue > 0 && <p className="reward-summary-line">Candle gifts <b>{money(earnedCandleValue)} value</b></p>}
-          {earnedCrackerValue > 0 && <p className="reward-summary-line">Cracker gifts <b>{money(earnedCrackerValue)} value</b></p>}
+          {earnedCrackerValue > 0 && <p className="reward-summary-line">Fancy cracker gifts <b>{money(earnedCrackerValue)} value</b></p>}
           {earnedBonusPacks.map((pack) => <p className="reward-summary-line" key={pack}>Bonus gift <b>{pack}</b></p>)}
           <button
             disabled={!cart.length}
