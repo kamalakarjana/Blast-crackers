@@ -46,27 +46,23 @@ Restart it after a new build or certificate renewal with `sudo systemctl restart
 
 For a domain, point DNS at the server and configure TLS (for example, with Certbot). Proxy the HTTPS site to Node and redirect HTTP to HTTPS:
 
-```nginx
-server {
-    listen 80;
-    server_name your-domain.example;
-    return 301 https://$host$request_uri;
-}
+The Nginx virtual host must proxy **all paths**, including `/api/*`, to the Node server. Do not use a static `root` or SPA `try_files` fallback for API paths: serving `index.html` for `/api/catalogue` makes the admin appear to save changes locally while other browsers cannot load them. This repository includes the domain configuration in `deploy/nginx-slv-crackers.conf`. On the server, configure the Node service with `HOST=127.0.0.1`, `PORT=4173`, and one persistent `PHOTO_STORAGE_DIR` (for example `/var/lib/slv-crackers`). When Nginx terminates HTTPS, leave `TLS_CERT_FILE` and `TLS_KEY_FILE` unset so the Node upstream uses HTTP on loopback.
 
-server {
-    listen 443 ssl;
-    server_name your-domain.example;
-    ssl_certificate /etc/letsencrypt/live/your-domain.example/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example/privkey.pem;
-    location / {
-        proxy_pass http://127.0.0.1:4173;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+Review the active Nginx virtual host with `sudo nginx -T`, update it to match the included configuration (adjust certificate paths if needed), then validate and reload Nginx:
+
+```sh
+sudo nginx -t
+sudo systemctl reload nginx
+sudo systemctl restart slv-crackers
 ```
+
+Confirm `sudo systemctl status slv-crackers` shows the Node `server.mjs` service running, then check the public API:
+
+```sh
+curl -i https://slvcrackers.shop/api/catalogue
+```
+
+The response must have `Content-Type: application/json` and a JSON object containing `products` and `categoryOffers`; an HTML response means Nginx is still serving the SPA instead of proxying to Node. Admin offer and catalogue changes are stored in the shared `PHOTO_STORAGE_DIR/catalogue.json`; all customer browsers load that shared file. Do not run multiple app instances with different storage directories.
 
 If the public-IP certificate is not installed yet, keep port 4173 private and use an SSH tunnel for administration: `ssh -L 4173:127.0.0.1:4173 ubuntu@YOUR_SERVER_IP`, then open `http://localhost:4173`. This encrypted tunnel is accepted for administration and customer registration. Do not enter the token or customer contact details on a public HTTP page.
 

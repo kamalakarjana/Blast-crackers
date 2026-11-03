@@ -227,7 +227,17 @@ function isCustomerRecord(value: unknown): value is CustomerRecord {
     && typeof candidate.consentedAt === "string";
 }
 async function readApiResult<T>(response: Response): Promise<T> {
-  const result = await response.json() as T & { error?: string };
+  const body = await response.text();
+  let result: T & { error?: string };
+  try {
+    result = JSON.parse(body) as T & { error?: string };
+  } catch {
+    const looksLikeHtml = response.headers.get("content-type")?.includes("text/html")
+      || /^\s*<!doctype html/i.test(body);
+    throw new Error(looksLikeHtml
+      ? "The server returned the website page instead of API data. Configure Nginx to forward /api/ requests to the Node server."
+      : "The server returned an invalid response for an API request.");
+  }
   if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
   return result;
 }
