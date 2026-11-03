@@ -512,6 +512,8 @@ function CategoryIcon({ category }: { category: string }) {
 function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [productStorageError, setProductStorageError] = useState("");
+  const [catalogueSaveStatus, setCatalogueSaveStatus] = useState("");
+  const [catalogueSaveRequest, setCatalogueSaveRequest] = useState(0);
   const [productsReady, setProductsReady] = useState(false);
   const [cart, setCart] = useState<CartItem[]>(() =>
     readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", [])).map(migrateFamilyPack),
@@ -538,6 +540,7 @@ function App() {
   const [cartReady, setCartReady] = useState(false);
   const [cartError, setCartError] = useState("");
   const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const processedCatalogueSaveRequest = useRef(0);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
     cartSaveQueue.current = save.catch(() => undefined);
@@ -579,7 +582,10 @@ function App() {
   }, []);
   useEffect(() => {
     if (!productsReady || !adminAuthenticated) return;
+    const saveImmediately = catalogueSaveRequest > processedCatalogueSaveRequest.current;
+    if (saveImmediately) processedCatalogueSaveRequest.current = catalogueSaveRequest;
     const timer = window.setTimeout(() => {
+      setCatalogueSaveStatus("Saving changes for all users...");
       const savedProducts = products.filter((product) => !seed.some((builtIn) => builtIn.id === product.id));
       void Promise.all(savedProducts.map(async (product) => {
         if (!product.image.startsWith("data:")) return product;
@@ -603,12 +609,14 @@ function App() {
           }));
         }
         setProductStorageError("");
+        setCatalogueSaveStatus("Saved for all users.");
       }).catch((cause: unknown) => {
         setProductStorageError(cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.");
+        setCatalogueSaveStatus("Could not save changes.");
       });
-    }, 350);
+    }, saveImmediately ? 0 : 350);
     return () => window.clearTimeout(timer);
-  }, [products, categoryOffers, productsReady, adminAuthenticated]);
+  }, [products, categoryOffers, productsReady, adminAuthenticated, catalogueSaveRequest]);
   useEffect(() => {
     try {
       localStorage.setItem("blast-products", JSON.stringify(products));
@@ -1249,6 +1257,8 @@ function App() {
           categoryOffers={categoryOffers}
           onSaveCategoryOffers={setCategoryOffers}
           catalogueError={productStorageError}
+          catalogueSaveStatus={catalogueSaveStatus}
+          onSaveCatalogue={() => setCatalogueSaveRequest((request) => request + 1)}
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           onSaveRewardTiers={(tiers) => {
@@ -2069,6 +2079,8 @@ function Catalogue({
   categoryOffers,
   onSaveCategoryOffers,
   catalogueError,
+  catalogueSaveStatus,
+  onSaveCatalogue,
   rewardTiers,
   rewardTiersError,
   onSaveRewardTiers,
@@ -2086,6 +2098,8 @@ function Catalogue({
   categoryOffers: CategoryOffer[];
   onSaveCategoryOffers: (offers: CategoryOffer[]) => void;
   catalogueError: string;
+  catalogueSaveStatus: string;
+  onSaveCatalogue: () => void;
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   onSaveRewardTiers: (tiers: RewardTier[]) => void;
@@ -2311,13 +2325,17 @@ function Catalogue({
         ))}
         <div className="offer-editor">
           <div className="offer-editor-heading"><strong>Category percentage offers</strong></div>
-        <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary. An item-specific offer set in Edit overrides the category percentage for that item.</p>
+          <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary for all customers. An item-specific offer set in Edit overrides the category percentage for that item.</p>
           <div className="offer-editor-grid">
             <label>Category<select value={newOfferCategory} onChange={(event) => setNewOfferCategory(event.target.value)}><option value="">Choose category</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label>Discount (%)<input type="number" min="1" max="90" step="1" value={newOfferPercent} onChange={(event) => setNewOfferPercent(Number(event.target.value))} /></label>
             <button type="button" className="save-product" onClick={addCategoryOffer}>Add category offer →</button>
           </div>
           {offerError && <p className="form-error" role="alert">{offerError}</p>}
+          <div className="catalogue-save-row">
+            <button type="button" className="save-product" onClick={onSaveCatalogue}>Save offers for all users</button>
+            <span role="status" aria-live="polite">{catalogueSaveStatus}</span>
+          </div>
           {categoryOffers.map((offer) => (
             <div className="offer-editor-heading category-offer-row" key={offer.id}>
               <strong>{offer.category} · {offer.percent}% off</strong>
