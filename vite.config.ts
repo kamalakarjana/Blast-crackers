@@ -43,6 +43,7 @@ function isCatalogueConfiguration(value: unknown): value is {
     if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100) return false;
     if (!Number.isSafeInteger(item.price) || Number(item.price) < 1 || Number(item.price) > 10_000_000) return false;
     if (item.discountPercent !== undefined && (!Number.isSafeInteger(item.discountPercent) || Number(item.discountPercent) < 0 || Number(item.discountPercent) > 90)) return false;
+    if (item.countsTowardTargetOffers !== undefined && typeof item.countsTowardTargetOffers !== 'boolean') return false;
     if (typeof item.pack !== 'string' || item.pack.length > 160) return false;
     if (typeof item.image !== 'string' || item.image.length > 300_000) return false;
     const validImage = item.image === ''
@@ -387,6 +388,8 @@ function productImageWriter(): Plugin {
                   const product = item as Record<string, unknown>;
                   return !Number.isSafeInteger(product.id) || typeof product.name !== 'string'
                     || !Number.isSafeInteger(product.price) || Number(product.price) < 0
+                    || (product.discountPercent !== undefined && (!Number.isSafeInteger(product.discountPercent) || Number(product.discountPercent) < 0 || Number(product.discountPercent) > 90))
+                    || (product.countsTowardTargetOffers !== undefined && typeof product.countsTowardTargetOffers !== 'boolean')
                     || !Number.isSafeInteger(product.quantity) || Number(product.quantity) < 1;
                 })) {
                   sendJson(400, { error: 'An order must contain valid cart items.' });
@@ -500,6 +503,8 @@ function productImageWriter(): Plugin {
                     || typeof product.name !== 'string'
                     || typeof product.category !== 'string'
                     || !Number.isSafeInteger(product.price)
+                    || (product.discountPercent !== undefined && (!Number.isSafeInteger(product.discountPercent) || Number(product.discountPercent) < 0 || Number(product.discountPercent) > 90))
+                    || (product.countsTowardTargetOffers !== undefined && typeof product.countsTowardTargetOffers !== 'boolean')
                     || typeof product.pack !== 'string'
                     || !Number.isSafeInteger(product.quantity)
                     || Number(product.quantity) < 1;

@@ -563,6 +563,8 @@ function normalizeCart(value) {
     if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 160) return null;
     if (typeof item.category !== 'string' || item.category.length > 100) return null;
     if (!Number.isSafeInteger(item.price) || item.price < 0 || item.price > 10_000_000) return null;
+    if (item.discountPercent !== undefined && (!Number.isSafeInteger(item.discountPercent) || item.discountPercent < 0 || item.discountPercent > 90)) return null;
+    if (item.countsTowardTargetOffers !== undefined && typeof item.countsTowardTargetOffers !== 'boolean') return null;
     if (typeof item.pack !== 'string' || item.pack.length > 160) return null;
     if (!Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 100_000) return null;
     const image = typeof item.image === 'string' && item.image.length <= 500
@@ -574,6 +576,8 @@ function normalizeCart(value) {
       name: item.name.trim(),
       category: item.category,
       price: item.price,
+      ...(item.discountPercent !== undefined ? { discountPercent: item.discountPercent } : {}),
+      ...(item.countsTowardTargetOffers !== undefined ? { countsTowardTargetOffers: item.countsTowardTargetOffers } : {}),
       pack: item.pack,
       image,
       quantity: item.quantity,
@@ -711,6 +715,7 @@ function isCatalogueConfiguration(value) {
     if (typeof product.category !== 'string' || !product.category.trim() || product.category.length > 100) return false;
     if (!Number.isSafeInteger(product.price) || product.price < 1 || product.price > 10_000_000) return false;
     if (product.discountPercent !== undefined && (!Number.isSafeInteger(product.discountPercent) || product.discountPercent < 0 || product.discountPercent > 90)) return false;
+    if (product.countsTowardTargetOffers !== undefined && typeof product.countsTowardTargetOffers !== 'boolean') return false;
     if (typeof product.pack !== 'string' || product.pack.length > 160) return false;
     if (typeof product.image !== 'string' || product.image.length > 300_000) return false;
     const validImage = product.image === ''

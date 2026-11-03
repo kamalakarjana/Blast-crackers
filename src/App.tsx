@@ -14,6 +14,7 @@ type Product = {
   category: string;
   price: number;
   discountPercent?: number;
+  countsTowardTargetOffers?: boolean;
   pack: string;
   image: string;
 };
@@ -51,6 +52,7 @@ const isProductList = (value: unknown): value is Product[] =>
     && typeof product.category === "string"
     && Number.isSafeInteger(product.price)
     && (product.discountPercent === undefined || (Number.isSafeInteger(product.discountPercent) && product.discountPercent >= 0 && product.discountPercent <= 90))
+    && (product.countsTowardTargetOffers === undefined || typeof product.countsTowardTargetOffers === "boolean")
     && typeof product.pack === "string"
     && typeof product.image === "string",
   );
@@ -149,6 +151,7 @@ const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
   const percent = getProductOfferPercent(product, offers);
   return percent ? Math.round(product.price * (100 - percent) / 100) : product.price;
 };
+const countsTowardTargetOffers = (product: Product) => product.countsTowardTargetOffers !== false;
 const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
 const categoryFromRoute = (categories: string[]) => {
   const prefix = "#/category/";
@@ -722,14 +725,16 @@ function App() {
   );
   const categorySavings = currentCart.reduce((sum, item) =>
     sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
+  const targetOfferSpend = currentCart.reduce((sum, item) =>
+    sum + (countsTowardTargetOffers(item) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
   const activeOffer = getApplicableOffer(Math.max(0, subtotal - categorySavings), user, offers, orderCount);
   const total = Math.max(0, subtotal - categorySavings - (activeOffer?.discount || 0));
-  const earnedRewardTiers = getEarnedRewards(rewardTiers, subtotal);
+  const earnedRewardTiers = getEarnedRewards(rewardTiers, targetOfferSpend);
   const rewardCandleValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.candleValue, 0);
   const rewardCrackerValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.crackerValue, 0);
   const rewardBonusPacks = [...new Set(earnedRewardTiers.map((tier) => tier.bonusPack).filter(Boolean))];
   const nextRewardTier = rewardTiers
-    .filter((tier) => tier.enabled && tier.threshold > subtotal)
+    .filter((tier) => tier.enabled && tier.threshold > targetOfferSpend)
     .sort((left, right) => left.threshold - right.threshold)[0];
   const count = currentCart.reduce((sum, item) => sum + item.quantity, 0);
   const changeQuantity = (product: Product, delta: number) =>
@@ -858,7 +863,7 @@ function App() {
       setCustomerDetailsOpen(true);
       return;
     }
-    const rewardTiersEarned = getEarnedRewards(rewardTiers, subtotal);
+    const rewardTiersEarned = getEarnedRewards(rewardTiers, targetOfferSpend);
     const rewards = [
       rewardTiersEarned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
         ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
@@ -874,11 +879,14 @@ function App() {
     const identity = await authenticateCustomer(input);
     const savedCart = await readCustomerCart();
     const guestCart = readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", []));
-    const restoredCart = savedCart.length ? savedCart : guestCart;
-    if (!savedCart.length && guestCart.length) await queueCartSave(guestCart);
+    const restoredCart = (savedCart.length ? savedCart : guestCart).map(migrateFamilyPack).map((item) => {
+      const currentProduct = products.find((product) => product.id === item.id);
+      return currentProduct ? { ...currentProduct, quantity: item.quantity } : item;
+    });
+    if (!savedCart.length && guestCart.length) await queueCartSave(restoredCart);
     localStorage.removeItem("blast-cart");
     localStorage.removeItem("blast-cart-guest");
-    setCart(restoredCart.map(migrateFamilyPack));
+    setCart(restoredCart);
     setUser(identity);
     setCartError("");
     setCartReady(true);
@@ -889,7 +897,9 @@ function App() {
       const savedCategorySavings = restoredCart.reduce((sum, item) =>
         sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
       const customerOffer = getApplicableOffer(Math.max(0, cartSubtotal - savedCategorySavings), identity, offers, orderCount);
-      const earned = getEarnedRewards(rewardTiers, cartSubtotal);
+      const restoredTargetOfferSpend = restoredCart.reduce((sum, item) =>
+        sum + (countsTowardTargetOffers(item) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
+      const earned = getEarnedRewards(rewardTiers, restoredTargetOfferSpend);
       const rewards = [
         earned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
           ? `${money(earned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
@@ -1064,7 +1074,7 @@ function App() {
             </section>
             {productStorageError && <p className="reward-api-error" role="alert">{productStorageError}</p>}
             <RewardProgress
-              subtotal={subtotal}
+              subtotal={targetOfferSpend}
               earnedCandleValue={rewardCandleValue}
               earnedCrackerValue={rewardCrackerValue}
               earnedBonusPacks={rewardBonusPacks}
@@ -1132,6 +1142,7 @@ function App() {
         <Cart
           cart={currentCart}
           subtotal={subtotal}
+          targetOfferSpend={targetOfferSpend}
           total={total}
           categoryOffers={categoryOffers}
           categorySavings={categorySavings}
@@ -1351,6 +1362,7 @@ function RewardProgress({
       </div>
       {nextTier && <div className="reward-progress-track"><span style={{ width: `${progress}%` }} /></div>}
       {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
+      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounts are counted; items excluded by the admin do not count.</p>
       {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
     </section>
   );
@@ -1359,6 +1371,7 @@ function RewardProgress({
 function Cart({
   cart,
   subtotal,
+  targetOfferSpend,
   total,
   categoryOffers,
   categorySavings,
@@ -1375,6 +1388,7 @@ function Cart({
 }: {
   cart: CartItem[];
   subtotal: number;
+  targetOfferSpend: number;
   total: number;
   categoryOffers: CategoryOffer[];
   categorySavings: number;
@@ -1389,12 +1403,12 @@ function Cart({
   onDownloadPdf: () => void;
   onCheckout: () => void;
 }) {
-  const earned = getEarnedRewards(rewardTiers, subtotal);
+  const earned = getEarnedRewards(rewardTiers, targetOfferSpend);
   const earnedCandleValue = earned.reduce((sum, tier) => sum + tier.candleValue, 0);
   const earnedCrackerValue = earned.reduce((sum, tier) => sum + tier.crackerValue, 0);
   const earnedBonusPacks = [...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean))];
   const nextTier = rewardTiers
-    .filter((tier) => tier.enabled && tier.threshold > subtotal)
+    .filter((tier) => tier.enabled && tier.threshold > targetOfferSpend)
     .sort((left, right) => left.threshold - right.threshold)[0];
   return (
     <main className="cart-page">
@@ -1417,7 +1431,7 @@ function Cart({
         <section>
           {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
           <RewardProgress
-            subtotal={subtotal}
+            subtotal={targetOfferSpend}
             earnedCandleValue={earnedCandleValue}
             earnedCrackerValue={earnedCrackerValue}
             earnedBonusPacks={earnedBonusPacks}
@@ -2166,6 +2180,15 @@ function Catalogue({
             />
             <small>0% means no discount; 10% off ₹100 makes the item ₹90.</small>
           </label>
+          <label className="product-target-offer-option">
+            <span>Counts toward target offers</span>
+            <input
+              type="checkbox"
+              checked={draft.countsTowardTargetOffers !== false}
+              onChange={(event) => setDraft({ ...draft, countsTowardTargetOffers: event.target.checked })}
+            />
+            <small>When off, this item still gets its discount but its discounted price does not count toward shopping reward targets.</small>
+          </label>
           <label>
             Upload product image
             <input
@@ -2236,7 +2259,7 @@ function Catalogue({
         ))}
         <div className="offer-editor">
           <div className="offer-editor-heading"><strong>Category percentage offers</strong></div>
-          <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary.</p>
+        <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary. An item-specific offer set in Edit overrides the category percentage for that item.</p>
           <div className="offer-editor-grid">
             <label>Category<select value={newOfferCategory} onChange={(event) => setNewOfferCategory(event.target.value)}><option value="">Choose category</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label>Discount (%)<input type="number" min="1" max="90" step="1" value={newOfferPercent} onChange={(event) => setNewOfferPercent(Number(event.target.value))} /></label>
@@ -2272,6 +2295,7 @@ function Catalogue({
             </div>
             <span>{money(product.price)}</span>
             <span>{product.discountPercent === undefined ? "Uses category offer" : `${product.discountPercent}% item offer`}</span>
+            <span>{countsTowardTargetOffers(product) ? "Counts for target offers" : "Excluded from target offers"}</span>
             <button onClick={() => edit(product)}>Edit</button>
             <button onClick={() => { if (window.confirm(`Delete ${product.name}?`)) setProducts(products.filter((item) => item.id !== product.id)); }}>Delete</button>
           </div>
