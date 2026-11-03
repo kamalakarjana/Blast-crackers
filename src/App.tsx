@@ -13,6 +13,7 @@ type Product = {
   name: string;
   category: string;
   price: number;
+  discountPercent?: number;
   pack: string;
   image: string;
 };
@@ -49,6 +50,7 @@ const isProductList = (value: unknown): value is Product[] =>
     && typeof product.name === "string"
     && typeof product.category === "string"
     && Number.isSafeInteger(product.price)
+    && (product.discountPercent === undefined || (Number.isSafeInteger(product.discountPercent) && product.discountPercent >= 0 && product.discountPercent <= 90))
     && typeof product.pack === "string"
     && typeof product.image === "string",
   );
@@ -141,9 +143,11 @@ const getApplicableOffer = (subtotal: number, customer: CustomerIdentity | null,
 };
 const getCategoryOffer = (category: string, offers: CategoryOffer[]) =>
   offers.find((offer) => offer.enabled && offer.category === category);
+const getProductOfferPercent = (product: Product, offers: CategoryOffer[]) =>
+  product.discountPercent ?? getCategoryOffer(product.category, offers)?.percent ?? 0;
 const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
-  const offer = getCategoryOffer(product.category, offers);
-  return offer ? Math.round(product.price * (100 - offer.percent) / 100) : product.price;
+  const percent = getProductOfferPercent(product, offers);
+  return percent ? Math.round(product.price * (100 - percent) / 100) : product.price;
 };
 const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
 const categoryFromRoute = (categories: string[]) => {
@@ -357,7 +361,7 @@ const downloadCartPdf = (
 
   const summaryLines = [
     { label: "Subtotal", value: pdfMoney(subtotal) },
-    ...(categorySavings ? [{ label: "Category offers", value: `-${pdfMoney(categorySavings)}` }] : []),
+    ...(categorySavings ? [{ label: "Item discounts", value: `-${pdfMoney(categorySavings)}` }] : []),
     ...(offer ? [{ label: offer.title, value: `-${pdfMoney(offer.discount)}` }] : []),
   ];
   const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${pdfText(reward)}`, pageWidth - margin * 2 - 4));
@@ -695,24 +699,28 @@ function App() {
   useEffect(() => {
     localStorage.setItem("blast-order-count", String(orderCount));
   }, [orderCount]);
+  const currentCart = useMemo(() => cart.map((item) => {
+    const currentProduct = products.find((product) => product.id === item.id);
+    return currentProduct ? { ...currentProduct, quantity: item.quantity } : item;
+  }), [cart, products]);
   useEffect(() => {
     if (!cartReady) return;
     if (!user) {
-      localStorage.setItem("blast-cart-guest", JSON.stringify(cart));
+      localStorage.setItem("blast-cart-guest", JSON.stringify(currentCart));
       return;
     }
     const timer = window.setTimeout(() => {
-      void queueCartSave(cart).then(() => setCartError("")).catch((cause: unknown) => {
+      void queueCartSave(currentCart).then(() => setCartError("")).catch((cause: unknown) => {
         setCartError(cause instanceof Error ? cause.message : "Your cart could not be saved to your account.");
       });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [cart, user, cartReady]);
-  const subtotal = cart.reduce(
+  }, [currentCart, user, cartReady]);
+  const subtotal = currentCart.reduce(
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const categorySavings = cart.reduce((sum, item) =>
+  const categorySavings = currentCart.reduce((sum, item) =>
     sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
   const activeOffer = getApplicableOffer(Math.max(0, subtotal - categorySavings), user, offers, orderCount);
   const total = Math.max(0, subtotal - categorySavings - (activeOffer?.discount || 0));
@@ -723,7 +731,7 @@ function App() {
   const nextRewardTier = rewardTiers
     .filter((tier) => tier.enabled && tier.threshold > subtotal)
     .sort((left, right) => left.threshold - right.threshold)[0];
-  const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const count = currentCart.reduce((sum, item) => sum + item.quantity, 0);
   const changeQuantity = (product: Product, delta: number) =>
     setCart((items) => {
       const current =
@@ -820,7 +828,7 @@ function App() {
       const response = await fetch("/api/customer-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cart, discount: categorySavings + (activeOffer?.discount || 0) }),
+        body: JSON.stringify({ cart: currentCart, discount: categorySavings + (activeOffer?.discount || 0) }),
       });
       const result = await readApiResult<{ orderId: string }>(response);
       setPendingOrderId(result.orderId);
@@ -860,7 +868,7 @@ function App() {
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
-    downloadCartPdf(cart, subtotal, total, activeOffer, rewards, categorySavings);
+    downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -1096,7 +1104,7 @@ function App() {
                         </div>
                         <strong className="best-price">
                           {offerPrice < product.price
-                            ? <><del>{money(product.price)}</del><span className="category-sale-price">{money(offerPrice)} <small>{getCategoryOffer(categoryName, categoryOffers)?.percent}% off</small></span></>
+                            ? <><del>{money(product.price)}</del><span className="category-sale-price">{money(offerPrice)} <small>{getProductOfferPercent(product, categoryOffers)}% off</small></span></>
                             : money(product.price)}
                         </strong>
                         <div className="stepper">
@@ -1122,7 +1130,7 @@ function App() {
       )}
       {renderedView === "cart" && (
         <Cart
-          cart={cart}
+          cart={currentCart}
           subtotal={subtotal}
           total={total}
           categoryOffers={categoryOffers}
@@ -1139,7 +1147,7 @@ function App() {
           onCheckout={startPayment}
         />
       )}
-      {renderedView === "offers" && <OffersPage offers={offers} categoryOffers={categoryOffers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
+      {renderedView === "offers" && <OffersPage offers={offers} products={products} categoryOffers={categoryOffers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
       {renderedView === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); openCart(true); }} onCart={() => openCart()} />
       )}
@@ -1257,7 +1265,7 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
   return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={Math.max(1, ...products.map((product) => product.id))} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{selected.id} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{item.product.id}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product) => <div className="entry-product" key={product.id}><b>#{product.id}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
-function OffersPage({ offers, categoryOffers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; categoryOffers: CategoryOffer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
+function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; products: Product[]; categoryOffers: CategoryOffer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
   return (
     <main className="offers-page">
       <button className="back-link" onClick={onBack}>← Continue shopping</button>
@@ -1266,6 +1274,12 @@ function OffersPage({ offers, categoryOffers, rewardTiers, rewardTiersError, onB
       <p className="offers-intro">Shopping rewards and eligible repeat-order discounts are applied when your cart meets the conditions.</p>
       {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
       <div className="offer-cards">
+        {products.filter((product) => product.discountPercent !== undefined && product.discountPercent > 0).map((product) => (
+          <article className="offer-card" key={`product-${product.id}`}>
+            <span className="offer-card-mark">{product.discountPercent}% OFF</span>
+            <div><p className="offer-card-kicker">ITEM OFFER</p><h2>{product.name}</h2><p>{product.category} · Save {money(product.price - getProductOfferPrice(product, categoryOffers))} per item.</p><strong>{money(product.price)} → {money(getProductOfferPrice(product, categoryOffers))}</strong></div>
+          </article>
+        ))}
         {categoryOffers.filter((offer) => offer.enabled).map((offer) => (
           <article className="offer-card" key={offer.id}>
             <span className="offer-card-mark">{offer.percent}% OFF</span>
@@ -1426,7 +1440,7 @@ function Cart({
                   <strong>{item.name}</strong>
                   <small>
                     {getProductOfferPrice(item, categoryOffers) < item.price
-                      ? <><del>{money(item.price)}</del> {money(getProductOfferPrice(item, categoryOffers))} ({getCategoryOffer(item.category, categoryOffers)?.percent}% off)</>
+                      ? <><del>{money(item.price)}</del> {money(getProductOfferPrice(item, categoryOffers))} ({getProductOfferPercent(item, categoryOffers)}% off)</>
                       : money(item.price)}
                     {item.pack ? ` / ${item.pack}` : ""}
                   </small>
@@ -1446,7 +1460,7 @@ function Cart({
           <p>
             Subtotal <b>{money(subtotal)}</b>
           </p>
-          {categorySavings > 0 && <p className="discount">Category offers <b>-{money(categorySavings)}</b></p>}
+          {categorySavings > 0 && <p className="discount">Item discounts <b>-{money(categorySavings)}</b></p>}
           {offer && (
             <p className="discount">
               {offer.title} <b>-{money(offer.discount)}</b>
@@ -2011,6 +2025,7 @@ function Catalogue({
     name: "",
     category: "Sparklers",
     price: 0,
+    discountPercent: undefined,
     pack: "",
     image: seed[0].image,
   };
@@ -2023,6 +2038,10 @@ function Catalogue({
   const save = () => {
     if (!draft.name.trim() || !draft.category.trim() || !Number.isSafeInteger(draft.price) || draft.price <= 0) {
       setProductError("Enter a product name, category, and whole-number price greater than zero.");
+      return;
+    }
+    if (draft.discountPercent !== undefined && (!Number.isInteger(draft.discountPercent) || draft.discountPercent < 0 || draft.discountPercent > 90)) {
+      setProductError("Enter an item discount from 0% to 90%, or leave it empty to use the category offer.");
       return;
     }
     if (draft.category.length > 100 || draft.name.length > 160 || draft.pack.length > 160) {
@@ -2132,6 +2151,22 @@ function Catalogue({
             />
           </label>
           <label>
+            Item offer (%)
+            <input
+              type="number"
+              min="0"
+              max="90"
+              step="1"
+              value={draft.discountPercent ?? ""}
+              onChange={(event) => setDraft({
+                ...draft,
+                discountPercent: event.target.value === "" ? undefined : Number(event.target.value),
+              })}
+              placeholder="Leave blank to use category offer"
+            />
+            <small>0% means no discount; 10% off ₹100 makes the item ₹90.</small>
+          </label>
+          <label>
             Upload product image
             <input
               type="file"
@@ -2236,6 +2271,7 @@ function Catalogue({
               </small>
             </div>
             <span>{money(product.price)}</span>
+            <span>{product.discountPercent === undefined ? "Uses category offer" : `${product.discountPercent}% item offer`}</span>
             <button onClick={() => edit(product)}>Edit</button>
             <button onClick={() => { if (window.confirm(`Delete ${product.name}?`)) setProducts(products.filter((item) => item.id !== product.id)); }}>Delete</button>
           </div>
