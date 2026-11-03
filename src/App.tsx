@@ -199,7 +199,7 @@ async function saveUploadedProductImage(productId: number, data: string): Promis
 }
 const rewardCopy = (tier: RewardTier) => [
   tier.candleValue > 0 ? `₹${tier.candleValue} candle gift` : "",
-  tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
+  tier.crackerValue > 0 ? `₹${tier.crackerValue} fancy crackers gift` : "",
   tier.bonusPack,
 ].filter(Boolean).join(" + ");
 type CustomerRegistration = { name: string; phone: string; email: string; password: string; consented: boolean };
@@ -955,7 +955,7 @@ function App() {
         ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
         : "",
       rewardTiersEarned.reduce((sum, tier) => sum + tier.crackerValue, 0) > 0
-        ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of crackers`
+        ? `${money(rewardTiersEarned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of fancy crackers`
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
@@ -991,7 +991,7 @@ function App() {
           ? `${money(earned.reduce((sum, tier) => sum + tier.candleValue, 0))} worth of candles`
           : "",
         earned.reduce((sum, tier) => sum + tier.crackerValue, 0) > 0
-          ? `${money(earned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of crackers`
+          ? `${money(earned.reduce((sum, tier) => sum + tier.crackerValue, 0))} worth of fancy crackers`
           : "",
         ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
       ].filter(Boolean);
@@ -1406,7 +1406,7 @@ function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiers
                 <p>
                   Earn {candleValue > 0 ? `${money(candleValue)} worth of candles` : ""}
                   {candleValue > 0 && crackerValue > 0 ? " + " : ""}
-                  {crackerValue > 0 ? `${money(crackerValue)} worth of crackers` : ""}
+                  {crackerValue > 0 ? `${money(crackerValue)} worth of fancy crackers` : ""}
                   {bonusPacks.length > 0 ? `${candleValue > 0 || crackerValue > 0 ? " + " : ""}${bonusPacks.join(" + ")}` : ""}.
                   Rewards stack with every target reached.
                 </p>
@@ -1416,7 +1416,7 @@ function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiers
           );
         })}
       </div>
-      <div className="offer-rules"><h2>How the shopping rewards work</h2><p>Reach a spending target to unlock its reward. Rewards from every target you reach are added together.</p><p>Candle and cracker amounts show the value of the gift items; they are not cash discounts.</p></div>
+      <div className="offer-rules"><h2>Target reward terms &amp; conditions</h2><p>Reach the eligible spending target to unlock its reward. Rewards from every target you reach are added together.</p><p>Fancy crackers and candle amounts show the value of the gift items; they are not cash discounts. Discounted items count toward targets only when enabled for their category.</p><p>Terms &amp; conditions apply.</p></div>
     </main>
   );
 }
@@ -1439,7 +1439,7 @@ function RewardProgress({
   const remaining = nextTier ? Math.max(0, nextTier.threshold - subtotal) : 0;
   const earnedRewards = [
     earnedCandleValue > 0 ? `${money(earnedCandleValue)} worth of candles` : "",
-    earnedCrackerValue > 0 ? `${money(earnedCrackerValue)} worth of crackers` : "",
+    earnedCrackerValue > 0 ? `${money(earnedCrackerValue)} worth of fancy crackers` : "",
     ...earnedBonusPacks,
   ].filter(Boolean);
 
@@ -1453,6 +1453,7 @@ function RewardProgress({
       {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
       <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounted items count only when their category is enabled by the admin; their discounted prices count.</p>
       {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
+      <p className="reward-terms">Target rewards are gifts, not cash discounts. Terms &amp; conditions apply.</p>
     </section>
   );
 }
@@ -1852,13 +1853,13 @@ function RewardTierManager({
       <p className="offer-admin-note">Each enabled tier adds its gifts to the rewards from all lower targets. Shoppers see progress while adding crackers.</p>
       {loadError && <p className="reward-api-error" role="alert">{loadError}</p>}
       <div className="reward-tier-table">
-        <div className="reward-tier-table-head"><span>Enabled</span><span>Cart target (₹)</span><span>Candles (₹ value)</span><span>Crackers (₹ value)</span><span>Bonus pack</span><span>Action</span></div>
+        <div className="reward-tier-table-head"><span>Enabled</span><span>Cart target (₹)</span><span>Candles (₹ value)</span><span>Fancy crackers (₹ value)</span><span>Bonus pack</span><span>Action</span></div>
         {draftTiers.map((tier) => (
           <div className="reward-tier-editor-row" key={tier.id}>
             <label aria-label={`Enable ${money(tier.threshold)} reward`}><input type="checkbox" checked={tier.enabled} onChange={(event) => updateTier(tier.id, { enabled: event.target.checked })} /></label>
             <label><span className="sr-only">Cart target</span><input type="number" min="1" step="1" value={tier.threshold} onChange={(event) => updateTier(tier.id, { threshold: Number(event.target.value) })} /></label>
             <label><span className="sr-only">Candle gift value</span><input type="number" min="0" step="1" value={tier.candleValue} onChange={(event) => updateTier(tier.id, { candleValue: Number(event.target.value) })} /></label>
-            <label><span className="sr-only">Cracker gift value</span><input type="number" min="0" step="1" value={tier.crackerValue} onChange={(event) => updateTier(tier.id, { crackerValue: Number(event.target.value) })} /></label>
+            <label><span className="sr-only">Fancy crackers gift value</span><input type="number" min="0" step="1" value={tier.crackerValue} onChange={(event) => updateTier(tier.id, { crackerValue: Number(event.target.value) })} /></label>
             <label><span className="sr-only">Bonus pack</span><input value={tier.bonusPack} onChange={(event) => updateTier(tier.id, { bonusPack: event.target.value })} placeholder="Optional pack" /></label>
             <button type="button" className="catalog-remove-photo" onClick={() => { updateDraftTiers((current) => current.filter((item) => item.id !== tier.id)); setStatus(""); }}>Delete</button>
           </div>

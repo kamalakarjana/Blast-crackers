@@ -202,6 +202,7 @@
 .editor-grid .product-target-offer-option input[type="checkbox"] { width: 20px; height: 20px; margin: 0; accent-color: var(--green); }
 .editor-grid .product-target-offer-option small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.45; }
 .reward-target-spend { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+.reward-terms { margin: 8px 0 0; color: var(--muted); font-size: 11px; font-style: italic; }
 @media (max-width: 720px) { .customer-row { grid-template-columns: 1fr; gap: 7px; }.customer-load-button { width: 100%; } }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .category-panel button { gap: 9px; padding: 6px 5px; font-size: 13px; }
