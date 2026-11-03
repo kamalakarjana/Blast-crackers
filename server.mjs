@@ -713,7 +713,7 @@ function isCatalogueConfiguration(value) {
     if (!Number.isSafeInteger(product.id) || product.id < 1 || product.id > 1_000_000 || productIds.has(product.id)) return false;
     if (typeof product.name !== 'string' || !product.name.trim() || product.name.length > 160) return false;
     if (typeof product.category !== 'string' || !product.category.trim() || product.category.length > 100) return false;
-    if (!Number.isSafeInteger(product.price) || product.price < 1 || product.price > 10_000_000) return false;
+    if (!Number.isSafeInteger(product.price) || product.price < 0 || product.price > 10_000_000) return false;
     if (product.discountPercent !== undefined && (!Number.isSafeInteger(product.discountPercent) || product.discountPercent < 0 || product.discountPercent > 90)) return false;
     if (product.countsTowardTargetOffers !== undefined && typeof product.countsTowardTargetOffers !== 'boolean') return false;
     if (typeof product.pack !== 'string' || product.pack.length > 160) return false;

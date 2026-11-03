@@ -41,7 +41,7 @@ function isCatalogueConfiguration(value: unknown): value is {
     if (!Number.isSafeInteger(item.id) || Number(item.id) < 1 || Number(item.id) > 1_000_000 || productIds.has(Number(item.id))) return false;
     if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 160) return false;
     if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100) return false;
-    if (!Number.isSafeInteger(item.price) || Number(item.price) < 1 || Number(item.price) > 10_000_000) return false;
+    if (!Number.isSafeInteger(item.price) || Number(item.price) < 0 || Number(item.price) > 10_000_000) return false;
     if (item.discountPercent !== undefined && (!Number.isSafeInteger(item.discountPercent) || Number(item.discountPercent) < 0 || Number(item.discountPercent) > 90)) return false;
     if (item.countsTowardTargetOffers !== undefined && typeof item.countsTowardTargetOffers !== 'boolean') return false;
     if (typeof item.pack !== 'string' || item.pack.length > 160) return false;

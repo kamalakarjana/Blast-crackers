@@ -562,7 +562,10 @@ function App() {
   const [cartReady, setCartReady] = useState(false);
   const [cartError, setCartError] = useState("");
   const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const catalogueSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const catalogueSaveVersion = useRef(0);
   const processedCatalogueSaveRequest = useRef(0);
+  const pendingCatalogueApplied = useRef(false);
   const productImageCloseButton = useRef<HTMLButtonElement>(null);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
@@ -612,41 +615,62 @@ function App() {
   }, []);
   useEffect(() => {
     if (!productsReady || !catalogueApiReady || !adminAuthenticated) return;
+    const saveVersion = ++catalogueSaveVersion.current;
     const saveImmediately = catalogueSaveRequest > processedCatalogueSaveRequest.current;
     if (saveImmediately) processedCatalogueSaveRequest.current = catalogueSaveRequest;
+    let localBackupError = "";
+    try {
+      localStorage.setItem("blast-pending-catalogue", JSON.stringify({ products, categoryOffers }));
+    } catch (cause) {
+      localBackupError = cause instanceof Error
+        ? ` Browser recovery copy could not be saved: ${cause.message}`
+        : " Browser recovery copy could not be saved.";
+    }
     const timer = window.setTimeout(() => {
-      setCatalogueSaveStatus("Saving changes for all users...");
-      void Promise.all(products.map(async (product) => {
-        if (!product.image.startsWith("data:")) return product;
-        const imageBlob = await (await fetch(product.image)).blob();
-        const image = await prepareProductImage(new File([imageBlob], "product-image.jpg", { type: imageBlob.type || "image/jpeg" }));
-        return { ...product, image: await saveUploadedProductImage(product.id, image) };
-      })).then(async (compressedProducts) => {
-        const response = await fetch("/api/catalogue", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ products: compressedProducts, categoryOffers }),
-        });
-        const result = await readApiResult<{ products: unknown; categoryOffers: unknown }>(response);
-        if (!isProductList(result.products) || !isCategoryOfferList(result.categoryOffers)) {
-          throw new Error("The server returned an invalid saved catalogue.");
+      const saveCatalogue = async () => {
+        if (saveVersion !== catalogueSaveVersion.current) return;
+        setCatalogueSaveStatus("Saving changes for all users...");
+        try {
+          const compressedProducts = await Promise.all(products.map(async (product) => {
+            if (!product.image.startsWith("data:")) return product;
+            const imageBlob = await (await fetch(product.image)).blob();
+            const image = await prepareProductImage(new File([imageBlob], "product-image.jpg", { type: imageBlob.type || "image/jpeg" }));
+            return { ...product, image: await saveUploadedProductImage(product.id, image) };
+          }));
+          const response = await fetch("/api/catalogue", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ products: compressedProducts, categoryOffers }),
+          });
+          const result = await readApiResult<{ products: unknown; categoryOffers: unknown }>(response);
+          if (!isProductList(result.products) || !isCategoryOfferList(result.categoryOffers)) {
+            throw new Error("The server returned an invalid saved catalogue.");
+          }
+          if (saveVersion !== catalogueSaveVersion.current) return;
+          const sharedProducts = mergeCatalogueProducts(result.products);
+          const sharedCategoryOffers = result.categoryOffers;
+          setProducts((current) =>
+            JSON.stringify(current) === JSON.stringify(sharedProducts) ? current : sharedProducts,
+          );
+          setCategoryOffers((current) =>
+            JSON.stringify(current) === JSON.stringify(sharedCategoryOffers) ? current : sharedCategoryOffers,
+          );
+          localStorage.removeItem("blast-pending-catalogue");
+          setCatalogueApiReady(true);
+          setProductStorageError("");
+          setCatalogueSaveStatus("Saved for all users.");
+        } catch (cause) {
+          if (saveVersion !== catalogueSaveVersion.current) return;
+          const errorMessage = cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.";
+          const message = errorMessage === "Products and category offers must have valid unique IDs, names, prices, and discount percentages."
+            ? `${errorMessage} The server may be running an older version; deploy the latest server.mjs and restart the service. Your changes are retained in this browser.${localBackupError}`
+            : `${errorMessage}${localBackupError}`;
+          setProductStorageError(message);
+          setCatalogueSaveStatus(`Could not save: ${message}`);
         }
-        const sharedProducts = mergeCatalogueProducts(result.products);
-        setProducts((current) =>
-          JSON.stringify(current) === JSON.stringify(sharedProducts) ? current : sharedProducts,
-        );
-        setCategoryOffers(result.categoryOffers);
-        setCatalogueApiReady(true);
-        setProductStorageError("");
-        setCatalogueSaveStatus("Saved for all users.");
-      }).catch((cause: unknown) => {
-        const errorMessage = cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.";
-        const message = errorMessage === "Products and category offers must have valid unique IDs, names, prices, and discount percentages."
-          ? `${errorMessage} The server may be running an older version; deploy the latest server.mjs and restart the service. Your unsaved changes are still on this page.`
-          : errorMessage;
-        setProductStorageError(message);
-        setCatalogueSaveStatus(`Could not save: ${message}`);
-      });
+      };
+      const queuedSave = catalogueSaveQueue.current.then(saveCatalogue, saveCatalogue);
+      catalogueSaveQueue.current = queuedSave;
     }, saveImmediately ? 0 : 350);
     return () => window.clearTimeout(timer);
   }, [products, categoryOffers, productsReady, catalogueApiReady, adminAuthenticated, catalogueSaveRequest]);
@@ -704,6 +728,24 @@ function App() {
     void loadSessions();
     return () => { cancelled = true; };
   }, []);
+  useEffect(() => {
+    if (!productsReady || !authStateReady || !adminAuthenticated || pendingCatalogueApplied.current) return;
+    pendingCatalogueApplied.current = true;
+    const pending = readStorage<unknown>("blast-pending-catalogue", null);
+    if (!pending || typeof pending !== "object" || !("products" in pending) || !("categoryOffers" in pending)) return;
+    const timer = window.setTimeout(() => {
+      if (!isProductList(pending.products) || !isCategoryOfferList(pending.categoryOffers)) {
+        localStorage.removeItem("blast-pending-catalogue");
+        setProductStorageError("A saved unsent catalogue copy in this browser is invalid and could not be restored.");
+        return;
+      }
+      setProducts(mergeCatalogueProducts(pending.products));
+      setCategoryOffers(pending.categoryOffers);
+      setCatalogueSaveStatus("Restored unsent changes from this browser. Saving them for all users...");
+      setCatalogueSaveRequest((request) => request + 1);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [productsReady, authStateReady, adminAuthenticated]);
   useEffect(() => {
     if (!productsReady || !authStateReady || adminAuthenticated) return;
     let active = true;
@@ -2260,8 +2302,7 @@ function Catalogue({
           <p className="admin-kicker">SLV / SHOP CONTROL</p>
           <h1>Cracker catalogue</h1>
           <p>
-            Update details here and they appear on the customer website
-            immediately.
+            Save catalogue changes to publish updated products, item discounts, and reward eligibility for all customers.
           </p>
         </div>
         <div className="admin-actions">
@@ -2269,9 +2310,15 @@ function Catalogue({
           <button onClick={onOrderEntry}>Order entry</button>
           <button onClick={onPhotoManagement}>Manage category photos</button>
           <button onClick={onCustomers}>Customer details</button>
+          <button onClick={onSaveCatalogue} disabled={!catalogueApiReady}>
+            {catalogueSaveStatus.startsWith("Saving") ? "Saving..." : catalogueSaveStatus.startsWith("Could not save") ? "Retry shared save" : "Save for all users"}
+          </button>
           <button onClick={onLogout}>Sign out</button>
         </div>
       </div>
+      <p className="catalogue-save-status" role="status" aria-live="polite">
+        {catalogueSaveStatus || "Product and offer edits are saved to the shared catalogue automatically."}
+      </p>
       {!catalogueApiReady && (
         <p className="reward-api-error" role="alert">
           Shared catalogue storage is unavailable. Product and offer changes are disabled until the server API returns catalogue JSON.
@@ -2430,17 +2477,13 @@ function Catalogue({
         ))}
         <div className="offer-editor">
           <div className="offer-editor-heading"><strong>Category percentage offers</strong></div>
-          <p className="offer-admin-note">Discounts apply to every item in the selected category. By default, discounted items do not count toward target rewards; enable the setting for selected categories to count their discounted selling prices.</p>
+          <p className="offer-admin-note">Discounts apply to every item in the selected category unless overridden by an item offer. Discounted items are excluded from target rewards by default; category settings can include a whole category, and individual product settings can override the category.</p>
           <div className="offer-editor-grid">
             <label>Category<select disabled={!catalogueApiReady} value={newOfferCategory} onChange={(event) => setNewOfferCategory(event.target.value)}><option value="">Choose category</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label>Discount (%)<input disabled={!catalogueApiReady} type="number" min="1" max="90" step="1" value={newOfferPercent} onChange={(event) => setNewOfferPercent(Number(event.target.value))} /></label>
             <button type="button" className="save-product" onClick={addCategoryOffer} disabled={!catalogueApiReady}>Add category offer →</button>
           </div>
           {offerError && <p className="form-error" role="alert">{offerError}</p>}
-          <div className="catalogue-save-row">
-            <button type="button" className="save-product" onClick={onSaveCatalogue} disabled={!catalogueApiReady}>Save offers for all users</button>
-            <span role="status" aria-live="polite">{catalogueSaveStatus}</span>
-          </div>
           {categoryOffers.map((offer) => (
             <div className="offer-editor-heading category-offer-row" key={offer.id}>
               <strong>{offer.category} · {offer.percent}% off</strong>

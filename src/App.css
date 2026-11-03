@@ -584,18 +584,8 @@ button { cursor: pointer; }
   border-radius: 10px;
 }
 .admin-product-row:hover { background: #f8faf7; }
-.catalogue-save-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 18px 0 8px;
-}
-.catalogue-save-row span {
-  color: var(--muted-ink);
-  font-size: 13px;
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
+.catalogue-save-status { margin: 10px 0; color: var(--muted-ink); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.admin-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-page input:not([type="checkbox"]), .admin-page select, .admin-page textarea,
 .account-page input, .account-page select, .account-page textarea {
   border-color: #dce5dc;
@@ -625,7 +615,6 @@ button { cursor: pointer; }
   .order-heading::after { right: -125px; }
   .shop-offers-banner, .reward-progress { padding: 18px; border-radius: 15px; }
   .category-section { border-radius: 14px; }
-  .catalogue-save-row { align-items: flex-start; flex-direction: column; }
   .cart-page, .offers-page, .info-page, .admin-page {
     width: calc(100% - 24px);
     margin: 22px auto 40px;
