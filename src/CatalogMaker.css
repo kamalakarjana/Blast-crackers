@@ -288,3 +288,45 @@
     grid-column: auto;
   }
 }
+
+.catalog-maker {
+  max-width: 1240px;
+  padding-top: 48px;
+}
+
+.catalog-maker-header {
+  padding: clamp(22px, 4vw, 36px);
+  border: 1px solid #e6e9dc;
+  border-radius: 20px;
+  background: linear-gradient(120deg, #fffdf6, #eef6ec);
+  box-shadow: 0 12px 32px rgb(26 56 39 / 7%);
+}
+
+.catalog-maker-kicker { color: #18864b; }
+.catalog-maker-header h1 { color: #20392b; letter-spacing: -.035em; }
+.catalog-download, .catalog-photo-button, .catalog-folder-button, .catalog-remove-photo {
+  border-radius: 9px;
+}
+.catalog-download {
+  background: #18864b;
+  box-shadow: 0 6px 16px rgb(24 134 75 / 18%);
+}
+.catalog-download:hover { background: #125a38; transform: translateY(-1px); }
+.catalog-maker-tools, .catalog-maker-row, .catalog-maker-bottom, .catalog-empty {
+  border-color: #e3e9e2;
+  border-radius: 14px;
+  box-shadow: 0 8px 22px rgb(26 56 39 / 5%);
+}
+.catalog-maker-tools { padding: 22px; }
+.catalog-maker-row { transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.catalog-maker-row:hover {
+  border-color: #c8ddc9;
+  box-shadow: 0 12px 26px rgb(26 56 39 / 8%);
+  transform: translateY(-1px);
+}
+.catalog-maker-photo { border-radius: 12px; background: #f0f5ed; }
+
+@media (max-width: 700px) {
+  .catalog-maker { padding-top: 22px; }
+  .catalog-maker-header { border-radius: 16px; }
+}

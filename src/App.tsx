@@ -2181,13 +2181,13 @@ function Catalogue({
             <small>0% means no discount; 10% off ₹100 makes the item ₹90.</small>
           </label>
           <label className="product-target-offer-option">
-            <span>Counts toward target offers</span>
+            <span>Count discounted price toward target rewards</span>
             <input
               type="checkbox"
               checked={draft.countsTowardTargetOffers !== false}
               onChange={(event) => setDraft({ ...draft, countsTowardTargetOffers: event.target.checked })}
             />
-            <small>When off, this item still gets its discount but its discounted price does not count toward shopping reward targets.</small>
+            <small>Checked: the discounted selling price counts toward reward targets. Unchecked: the item still gets its discount, but none of its price counts toward reward targets.</small>
           </label>
           <label>
             Upload product image
