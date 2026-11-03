@@ -62,6 +62,7 @@ function isCatalogueConfiguration(value: unknown): value is {
     if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100 || categories.has(item.category)) return false;
     if (!Number.isSafeInteger(item.percent) || Number(item.percent) < 1 || Number(item.percent) > 90) return false;
     if (typeof item.enabled !== 'boolean') return false;
+    if (item.countsTowardTargetOffers !== undefined && typeof item.countsTowardTargetOffers !== 'boolean') return false;
     offerIds.add(item.id);
     categories.add(item.category);
   }

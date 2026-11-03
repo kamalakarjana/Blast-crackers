@@ -33,6 +33,7 @@ type CategoryOffer = {
   category: string;
   percent: number;
   enabled: boolean;
+  countsTowardTargetOffers?: boolean;
 };
 const parsePrice = (value: string | null) => Number(String(value ?? "0").replace(/[^0-9]/g, "")) || 0;
 const seed: Product[] = crackerCatalog.map((item, index) => ({
@@ -75,6 +76,7 @@ const isCategoryOfferList = (value: unknown): value is CategoryOffer[] => {
       || Number(candidate.percent) < 1
       || Number(candidate.percent) > 90
       || typeof candidate.enabled !== "boolean"
+      || (candidate.countsTowardTargetOffers !== undefined && typeof candidate.countsTowardTargetOffers !== "boolean")
     ) return false;
     ids.add(candidate.id);
     categories.add(candidate.category);
@@ -151,8 +153,10 @@ const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
   const percent = getProductOfferPercent(product, offers);
   return percent ? Math.round(product.price * (100 - percent) / 100) : product.price;
 };
-const countsTowardTargetOffers = (product: Product, offers: CategoryOffer[]) =>
-  getProductOfferPercent(product, offers) === 0;
+const countsTowardTargetOffers = (product: Product, offers: CategoryOffer[]) => {
+  if (getProductOfferPercent(product, offers) === 0) return true;
+  return offers.find((offer) => offer.category === product.category)?.countsTowardTargetOffers === true;
+};
 const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
 const categoryFromRoute = (categories: string[]) => {
   const prefix = "#/category/";
@@ -808,7 +812,7 @@ function App() {
   const categorySavings = currentCart.reduce((sum, item) =>
     sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
   const targetOfferSpend = currentCart.reduce((sum, item) =>
-    sum + (countsTowardTargetOffers(item, categoryOffers) ? item.price * item.quantity : 0), 0);
+    sum + (countsTowardTargetOffers(item, categoryOffers) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
   const activeOffer = getApplicableOffer(Math.max(0, subtotal - categorySavings), user, offers, orderCount);
   const total = Math.max(0, subtotal - categorySavings - (activeOffer?.discount || 0));
   const earnedRewardTiers = getEarnedRewards(rewardTiers, targetOfferSpend);
@@ -980,7 +984,7 @@ function App() {
         sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
       const customerOffer = getApplicableOffer(Math.max(0, cartSubtotal - savedCategorySavings), identity, offers, orderCount);
       const restoredTargetOfferSpend = restoredCart.reduce((sum, item) =>
-        sum + (countsTowardTargetOffers(item, categoryOffers) ? item.price * item.quantity : 0), 0);
+        sum + (countsTowardTargetOffers(item, categoryOffers) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
       const earned = getEarnedRewards(rewardTiers, restoredTargetOfferSpend);
       const rewards = [
         earned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
@@ -1447,7 +1451,7 @@ function RewardProgress({
       </div>
       {nextTier && <div className="reward-progress-track"><span style={{ width: `${progress}%` }} /></div>}
       {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
-      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Items with an active item or category discount are excluded.</p>
+      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounted items count only when their category is enabled by the admin; their discounted prices count.</p>
       {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
     </section>
   );
@@ -2179,6 +2183,7 @@ function Catalogue({
       category: newOfferCategory,
       percent: newOfferPercent,
       enabled: true,
+      countsTowardTargetOffers: false,
     }]);
     setOfferError("");
   };
@@ -2347,7 +2352,7 @@ function Catalogue({
         ))}
         <div className="offer-editor">
           <div className="offer-editor-heading"><strong>Category percentage offers</strong></div>
-          <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary for all customers. An item-specific offer set in Edit overrides the category percentage for that item.</p>
+          <p className="offer-admin-note">Discounts apply to every item in the selected category. By default, discounted items do not count toward target rewards; enable the setting for selected categories to count their discounted selling prices.</p>
           <div className="offer-editor-grid">
             <label>Category<select disabled={!catalogueApiReady} value={newOfferCategory} onChange={(event) => setNewOfferCategory(event.target.value)}><option value="">Choose category</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label>Discount (%)<input disabled={!catalogueApiReady} type="number" min="1" max="90" step="1" value={newOfferPercent} onChange={(event) => setNewOfferPercent(Number(event.target.value))} /></label>
@@ -2363,6 +2368,7 @@ function Catalogue({
               <strong>{offer.category} · {offer.percent}% off</strong>
               <label className="offer-toggle"><input type="checkbox" disabled={!catalogueApiReady} checked={offer.enabled} onChange={(event) => onSaveCategoryOffers(categoryOffers.map((item) => item.id === offer.id ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label>
               <label className="category-offer-percent">Discount (%)<input disabled={!catalogueApiReady} type="number" min="1" max="90" step="1" value={offer.percent} onChange={(event) => onSaveCategoryOffers(categoryOffers.map((item) => item.id === offer.id ? { ...item, percent: Number(event.target.value) } : item))} /></label>
+              <label className="offer-toggle category-reward-toggle"><input type="checkbox" disabled={!catalogueApiReady} checked={offer.countsTowardTargetOffers === true} onChange={(event) => onSaveCategoryOffers(categoryOffers.map((item) => item.id === offer.id ? { ...item, countsTowardTargetOffers: event.target.checked } : item))} /> Count discounted items toward target rewards</label>
               <button type="button" className="catalog-remove-photo" disabled={!catalogueApiReady} onClick={() => onSaveCategoryOffers(categoryOffers.filter((item) => item.id !== offer.id))}>Remove</button>
             </div>
           ))}

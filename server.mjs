@@ -733,6 +733,7 @@ function isCatalogueConfiguration(value) {
     if (typeof offer.category !== 'string' || !offer.category.trim() || offer.category.length > 100 || categories.has(offer.category)) return false;
     if (!Number.isSafeInteger(offer.percent) || offer.percent < 1 || offer.percent > 90) return false;
     if (typeof offer.enabled !== 'boolean') return false;
+    if (offer.countsTowardTargetOffers !== undefined && typeof offer.countsTowardTargetOffers !== 'boolean') return false;
     offerIds.add(offer.id);
     categories.add(offer.category);
   }
