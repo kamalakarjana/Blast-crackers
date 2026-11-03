@@ -591,6 +591,7 @@ button { cursor: pointer; }
   color: var(--muted-ink);
   font-size: 13px;
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 .admin-page input:not([type="checkbox"]), .admin-page select, .admin-page textarea,
 .account-page input, .account-page select, .account-page textarea {
