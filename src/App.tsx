@@ -160,6 +160,7 @@ const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
 };
 const countsTowardTargetOffers = (product: Product, offers: CategoryOffer[]) => {
   if (getProductOfferPercent(product, offers) === 0) return true;
+  if (product.countsTowardTargetOffers !== undefined) return product.countsTowardTargetOffers;
   return offers.find((offer) => offer.category === product.category)?.countsTowardTargetOffers === true;
 };
 const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
@@ -1475,7 +1476,7 @@ function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiers
           );
         })}
       </div>
-      <div className="offer-rules"><h2>Target reward terms &amp; conditions</h2><p>Reach the eligible spending target to unlock its reward. Rewards from every target you reach are added together.</p><p>Fancy crackers and candle amounts show the value of the gift items; they are not cash discounts. Discounted items count toward targets only when enabled for their category.</p><p>Terms &amp; conditions apply.</p></div>
+      <div className="offer-rules"><h2>Target reward terms &amp; conditions</h2><p>Reach the eligible spending target to unlock its reward. Rewards from every target you reach are added together.</p><p>Fancy crackers and candle amounts show the value of the gift items; they are not cash discounts. Discounted items count toward targets only when enabled for that item or its category.</p><p>Terms &amp; conditions apply.</p></div>
     </main>
   );
 }
@@ -1510,7 +1511,7 @@ function RewardProgress({
       </div>
       {nextTier && <div className="reward-progress-track"><span style={{ width: `${progress}%` }} /></div>}
       {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
-      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounted items count only when their category is enabled by the admin; their discounted prices count.</p>
+      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounted items count when enabled for the item or its category; their discounted prices count.</p>
       {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
       <p className="reward-terms">Target rewards are gifts, not cash discounts. Terms &amp; conditions apply.</p>
     </section>
@@ -2226,6 +2227,7 @@ function Catalogue({
         ? [...products, saved]
         : products.map((product) => (product.id === editing ? saved : product)),
     );
+    onSaveCatalogue();
     setDraft(empty);
     setEditing(null);
   };
@@ -2340,8 +2342,24 @@ function Catalogue({
               })}
               placeholder="Leave blank to use category offer"
             />
-            <small>0% means no discount. Discounted items count toward target rewards only when enabled for their category.</small>
+            <small>0% means no discount. For discounted items, choose whether this item counts toward target rewards or uses its category setting.</small>
           </label>
+          {getProductOfferPercent(draft, categoryOffers) > 0 && (
+            <label className="product-target-offer-option">
+              <span>Count this discounted item toward target rewards</span>
+              <input
+                type="checkbox"
+                checked={countsTowardTargetOffers(draft, categoryOffers)}
+                onChange={(event) => setDraft({
+                  ...draft,
+                  countsTowardTargetOffers: event.target.checked,
+                })}
+              />
+              <small>
+                When enabled, this item contributes its discounted price toward reward targets and overrides its category setting.
+              </small>
+            </label>
+          )}
           <label>
             Upload product image
             <input
