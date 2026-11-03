@@ -7,22 +7,63 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const maxUploadBytes = 1_500_000;
-const maxProductId = 102;
+const maxCatalogueBytes = 2_100_000;
+const maxProductId = 1_000_000;
 const scrypt = promisify(scryptCallback);
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
 const customerSessionCookie = 'slv_customer_session';
 const adminSessionCookie = 'slv_admin_session';
 
-async function parseRequestJson(request: IncomingMessage): Promise<unknown> {
+async function parseRequestJson(request: IncomingMessage, maximumBytes = 100_000): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buffer.length;
-    if (totalBytes > 100_000) throw new Error('Request body is too large.');
+    if (totalBytes > maximumBytes) throw new Error('Request body is too large.');
     chunks.push(buffer);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+}
+
+function isCatalogueConfiguration(value: unknown): value is {
+  products: Record<string, unknown>[];
+  categoryOffers: Record<string, unknown>[];
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.products) || candidate.products.length > 500) return false;
+  if (!Array.isArray(candidate.categoryOffers) || candidate.categoryOffers.length > 200) return false;
+  const productIds = new Set<number>();
+  for (const product of candidate.products) {
+    if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+    const item = product as Record<string, unknown>;
+    if (!Number.isSafeInteger(item.id) || Number(item.id) <= 102 || Number(item.id) > 1_000_000 || productIds.has(Number(item.id))) return false;
+    if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 160) return false;
+    if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100) return false;
+    if (!Number.isSafeInteger(item.price) || Number(item.price) < 1 || Number(item.price) > 10_000_000) return false;
+    if (typeof item.pack !== 'string' || item.pack.length > 160) return false;
+    if (typeof item.image !== 'string' || item.image.length > 300_000) return false;
+    const validImage = item.image === ''
+      || item.image.startsWith('/product-images/')
+      || item.image.startsWith('https://')
+      || /^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(item.image);
+    if (!validImage) return false;
+    productIds.add(Number(item.id));
+  }
+  const offerIds = new Set<string>();
+  const categories = new Set<string>();
+  for (const offer of candidate.categoryOffers) {
+    if (!offer || typeof offer !== 'object' || Array.isArray(offer)) return false;
+    const item = offer as Record<string, unknown>;
+    if (typeof item.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(item.id) || offerIds.has(item.id)) return false;
+    if (typeof item.category !== 'string' || !item.category.trim() || item.category.length > 100 || categories.has(item.category)) return false;
+    if (!Number.isSafeInteger(item.percent) || Number(item.percent) < 1 || Number(item.percent) > 90) return false;
+    if (typeof item.enabled !== 'boolean') return false;
+    offerIds.add(item.id);
+    categories.add(item.category);
+  }
+  return true;
 }
 
 function isLoopbackRequest(request: IncomingMessage): boolean {
@@ -84,7 +125,7 @@ function productImageWriter(): Plugin {
         const authPath = url.pathname === '/api/customers'
           || url.pathname === '/api/customers/password'
           || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem|customer-orders(?:\/[0-9a-f-]{36}\/confirm)?|orders)$/.test(url.pathname);
-        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/customers' && !authPath) {
+        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/catalogue' && url.pathname !== '/api/customers' && !authPath) {
           next();
           return;
         }
@@ -105,6 +146,7 @@ function productImageWriter(): Plugin {
         const customersPath = resolve(dataDirectory, 'customers.json');
         const cartsPath = resolve(dataDirectory, 'customerCarts.json');
         const ordersPath = resolve(dataDirectory, 'customerOrders.json');
+        const cataloguePath = resolve(dataDirectory, 'catalogue.json');
 
         const sendUnauthorized = (message: string) => sendJson(401, { error: message });
         const currentSession = (kind: 'customer' | 'admin') => {
@@ -136,6 +178,51 @@ function productImageWriter(): Plugin {
           await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
           await rename(temporaryPath, path);
         };
+
+        if (url.pathname === '/api/catalogue') {
+          if (!isLoopbackRequest(request)) {
+            sendJson(403, { error: 'Catalogue management is restricted to the local development machine.' });
+            return;
+          }
+          void (async () => {
+            try {
+              if (request.method === 'GET') {
+                let configuration: unknown = { products: [], categoryOffers: [] };
+                try {
+                  configuration = JSON.parse(await readFile(cataloguePath, 'utf8')) as unknown;
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                }
+                if (!isCatalogueConfiguration(configuration)) throw new Error('Saved catalogue configuration is invalid.');
+                sendJson(200, configuration);
+                return;
+              }
+              if (request.method !== 'PUT') {
+                sendJson(405, { error: 'Use GET to load or PUT to update the catalogue.' });
+                return;
+              }
+              if (!currentSession('admin')) {
+                sendUnauthorized('Sign in as the administrator to update the catalogue.');
+                return;
+              }
+              const configuration = await parseRequestJson(request, maxCatalogueBytes);
+              if (!isCatalogueConfiguration(configuration)) {
+                sendJson(400, { error: 'Products and category offers must have valid unique IDs, names, prices, and discount percentages.' });
+                return;
+              }
+              await saveJson(cataloguePath, configuration);
+              sendJson(200, configuration);
+            } catch (error) {
+              server.config.logger.error('Catalogue configuration request failed.', {
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+              sendJson(error instanceof Error && error.message === 'Request body is too large.' ? 413 : 400, {
+                error: error instanceof Error ? error.message : 'Catalogue configuration could not be saved.',
+              });
+            }
+          })();
+          return;
+        }
 
         if (authPath) {
           if (!isLoopbackRequest(request)) {

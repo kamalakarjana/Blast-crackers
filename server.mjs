@@ -16,6 +16,7 @@ const rewardTiersPath = resolve(storageDirectory, 'rewardTiers.json');
 const customersPath = resolve(storageDirectory, 'customers.json');
 const cartsPath = resolve(storageDirectory, 'customerCarts.json');
 const ordersPath = resolve(storageDirectory, 'customerOrders.json');
+const cataloguePath = resolve(storageDirectory, 'catalogue.json');
 const sourceManifestPath = resolve(projectRoot, 'src', 'productImages.json');
 const sourceRewardTiersPath = resolve(projectRoot, 'src', 'rewardTiers.json');
 const uploadToken = process.env.PHOTO_UPLOAD_TOKEN || '';
@@ -25,7 +26,7 @@ const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 4173);
 const tlsCertificatePath = process.env.TLS_CERT_FILE || '';
 const tlsPrivateKeyPath = process.env.TLS_KEY_FILE || '';
-const maximumProductId = 102;
+const maximumProductId = 1_000_000;
 const maximumImageBytes = 1_500_000;
 const maximumRequestBytes = 2_100_000;
 const derivePassword = promisify(scryptCallback);
@@ -698,6 +699,85 @@ async function saveRewardTiers(tiers) {
   await rename(temporaryPath, rewardTiersPath);
 }
 
+function isCatalogueConfiguration(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { products, categoryOffers } = value;
+  if (!Array.isArray(products) || products.length > 500 || !Array.isArray(categoryOffers) || categoryOffers.length > 200) return false;
+  const productIds = new Set();
+  for (const product of products) {
+    if (!product || typeof product !== 'object' || Array.isArray(product)) return false;
+    if (!Number.isSafeInteger(product.id) || product.id <= 102 || product.id > 1_000_000 || productIds.has(product.id)) return false;
+    if (typeof product.name !== 'string' || !product.name.trim() || product.name.length > 160) return false;
+    if (typeof product.category !== 'string' || !product.category.trim() || product.category.length > 100) return false;
+    if (!Number.isSafeInteger(product.price) || product.price < 1 || product.price > 10_000_000) return false;
+    if (typeof product.pack !== 'string' || product.pack.length > 160) return false;
+    if (typeof product.image !== 'string' || product.image.length > 300_000) return false;
+    const validImage = product.image === ''
+      || product.image.startsWith('/product-images/')
+      || product.image.startsWith('https://')
+      || /^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(product.image);
+    if (!validImage) return false;
+    productIds.add(product.id);
+  }
+  const offerIds = new Set();
+  const categories = new Set();
+  for (const offer of categoryOffers) {
+    if (!offer || typeof offer !== 'object' || Array.isArray(offer)) return false;
+    if (typeof offer.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(offer.id) || offerIds.has(offer.id)) return false;
+    if (typeof offer.category !== 'string' || !offer.category.trim() || offer.category.length > 100 || categories.has(offer.category)) return false;
+    if (!Number.isSafeInteger(offer.percent) || offer.percent < 1 || offer.percent > 90) return false;
+    if (typeof offer.enabled !== 'boolean') return false;
+    offerIds.add(offer.id);
+    categories.add(offer.category);
+  }
+  return true;
+}
+
+async function getCatalogueConfiguration() {
+  try {
+    const configuration = JSON.parse(await readFile(cataloguePath, 'utf8'));
+    if (!isCatalogueConfiguration(configuration)) throw new Error('Saved catalogue configuration is invalid.');
+    return configuration;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { products: [], categoryOffers: [] };
+    throw error;
+  }
+}
+
+async function handleCatalogueApi(request, response) {
+  if (request.method === 'GET') {
+    sendJson(response, 200, await getCatalogueConfiguration());
+    return;
+  }
+  if (request.method !== 'PUT') {
+    sendJson(response, 405, { error: 'Use GET to load or PUT to update the catalogue.' });
+    return;
+  }
+  if (!uploadToken && !getSession(request, 'admin')) {
+    sendJson(response, 503, { error: 'Catalogue updates are not configured on this server.' });
+    return;
+  }
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Use HTTPS or an SSH tunnel to update the catalogue.' });
+    return;
+  }
+  if (!isAuthorized(request)) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to update the catalogue.' });
+    return;
+  }
+  const configuration = await parseJsonBody(request, response, 'Catalogue details must contain valid JSON.');
+  if (!configuration) return;
+  if (!isCatalogueConfiguration(configuration)) {
+    sendJson(response, 400, { error: 'Products and category offers must have valid unique IDs, names, prices, and discount percentages.' });
+    return;
+  }
+  await mkdir(storageDirectory, { recursive: true });
+  const temporaryPath = `${cataloguePath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(configuration, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, cataloguePath);
+  sendJson(response, 200, configuration);
+}
+
 async function readRequestBody(request) {
   const chunks = [];
   let totalBytes = 0;
@@ -915,6 +995,10 @@ const requestHandler = async (request, response) => {
       await handleRewardTiersApi(request, response);
       return;
     }
+    if (url.pathname === '/api/catalogue') {
+      await handleCatalogueApi(request, response);
+      return;
+    }
     if (url.pathname === '/api/customers') {
       await handleCustomersApi(request, response);
       return;
@@ -956,7 +1040,7 @@ const requestHandler = async (request, response) => {
       sendJson(response, 405, { error: 'Method not allowed.' });
       return;
     }
-    const imageMatch = /^\/product-images\/([1-9]\d{0,2})\.(jpg|webp)$/.exec(url.pathname);
+    const imageMatch = /^\/product-images\/([1-9]\d{0,6})\.(jpg|webp)$/.exec(url.pathname);
     if (imageMatch) {
       const productId = Number(imageMatch[1]);
       if (productId > maximumProductId || !(await serveProductImage(response, productId, imageMatch[2]))) {

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
-import { crackerCatalog } from "./crackerCatalog";
 import "./CatalogMaker.css";
 
 type ProductPhoto = {
@@ -11,39 +10,40 @@ type ProductPhoto = {
 
 type CatalogProduct = {
   id: number;
+  name: string;
+  category: string;
+  price: number;
+  pack: string;
   image: string;
 };
 
-const categories = [...new Set(crackerCatalog.map((item) => item.category))];
-const money = (price: string | null) => price ? `Rs. ${price}` : "Price not listed";
-const catalogGroups = categories.map((category) => ({
-  category,
-  items: crackerCatalog.filter((item) => item.category === category),
-}));
+const money = (price: number) => `Rs. ${price.toLocaleString("en-IN")}`;
 const productRowHeight = 3.75;
 const categoryHeaderHeight = 4.8;
-const catalogPages = (() => {
-  let bestSplit = 1;
-  let smallestPageDifference = Number.POSITIVE_INFINITY;
-  for (let split = 1; split < catalogGroups.length; split += 1) {
-    const firstPageHeight = catalogGroups.slice(0, split).reduce(
-      (height, group) => height + categoryHeaderHeight + group.items.length * productRowHeight,
-      0,
-    );
-    const secondPageHeight = catalogGroups.slice(split).reduce(
-      (height, group) => height + categoryHeaderHeight + group.items.length * productRowHeight,
-      0,
-    );
-    if (firstPageHeight > 249 || secondPageHeight > 249) continue;
-    const pageDifference = Math.abs(firstPageHeight - secondPageHeight);
-    if (pageDifference < smallestPageDifference) {
-      bestSplit = split;
-      smallestPageDifference = pageDifference;
+function getCatalogPages(products: CatalogProduct[]) {
+  const categories = [...new Set(products.map((product) => product.category))];
+  const pages: { category: string; items: CatalogProduct[] }[][] = [];
+  let page: { category: string; items: CatalogProduct[] }[] = [];
+  let pageHeight = 0;
+  const maxRows = Math.floor((249 - categoryHeaderHeight) / productRowHeight);
+
+  for (const category of categories) {
+    const items = products.filter((product) => product.category === category);
+    for (let start = 0; start < items.length; start += maxRows) {
+      const groupItems = items.slice(start, start + maxRows);
+      const groupHeight = categoryHeaderHeight + groupItems.length * productRowHeight;
+      if (page.length && pageHeight + groupHeight > 249) {
+        pages.push(page);
+        page = [];
+        pageHeight = 0;
+      }
+      page.push({ category, items: groupItems });
+      pageHeight += groupHeight;
     }
   }
-  return [catalogGroups.slice(0, bestSplit), catalogGroups.slice(bestSplit)];
-})();
-const pdfPageCount = catalogPages.length;
+  if (page.length) pages.push(page);
+  return pages.length ? pages : [[]];
+}
 
 function normalizeLabel(value: string) {
   return value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
@@ -109,7 +109,7 @@ async function preparePhoto(file: File): Promise<ProductPhoto> {
   }
 }
 
-function downloadCatalog() {
+function downloadCatalog(products: CatalogProduct[]) {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -118,6 +118,7 @@ function downloadCatalog() {
   const tableHeaderY = 25;
   const tableHeaderHeight = 6;
   const contentTop = tableHeaderY + tableHeaderHeight;
+  const catalogPages = getCatalogPages(products);
   const colors = {
     emerald: [18, 79, 58],
     deepEmerald: [13, 58, 43],
@@ -231,16 +232,18 @@ export default function CatalogMaker({
   const [isImporting, setIsImporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const folderInput = useRef<HTMLInputElement>(null);
+  const categories = useMemo(() => [...new Set(products.map((product) => product.category))], [products]);
+  const pdfPageCount = getCatalogPages(products).length;
 
   useEffect(() => {
     folderInput.current?.setAttribute("webkitdirectory", "");
   }, []);
 
-  const visibleItems = useMemo(() => crackerCatalog.filter((item) => {
+  const visibleItems = useMemo(() => products.filter((item) => {
     const matchesCategory = selectedCategory === "All categories" || item.category === selectedCategory;
     const matchesSearch = `${item.name} ${item.category}`.toLowerCase().includes(search.trim().toLowerCase());
     return matchesCategory && matchesSearch;
-  }), [search, selectedCategory]);
+  }), [products, search, selectedCategory]);
 
   const publishedImages = useMemo(
     () => new Map(products.filter((product) => product.image.startsWith("/product-images/")).map((product) => [product.id, product.image])),
@@ -306,7 +309,7 @@ export default function CatalogMaker({
         const categoryName = normalizeLabel(pathParts[pathParts.length - 2]);
         const originalName = file.name.replace(/\.[^.]+$/, "");
         const aliasedName = aliases[normalizeLabel(originalName)] || originalName;
-        const item = crackerCatalog.find((candidate) =>
+        const item = products.find((candidate) =>
           normalizeLabel(candidate.category) === categoryName &&
           normalizeLabel(candidate.name) === normalizeLabel(aliasedName),
         );
@@ -346,7 +349,7 @@ export default function CatalogMaker({
     try {
       setIsDownloading(true);
       setError("");
-      downloadCatalog();
+      downloadCatalog(products);
     } catch (cause) {
       setError(cause instanceof Error ? `PDF could not be created: ${cause.message}` : "PDF could not be created.");
     } finally {
@@ -380,7 +383,7 @@ export default function CatalogMaker({
             {categories.map((category) => <option key={category}>{category}</option>)}
           </select>
         </label>
-        <p>{Object.keys(photos).length} of {crackerCatalog.length} photos added</p>
+        <p>{Object.keys(photos).length} of {products.length} photos added</p>
         <label className="catalog-folder-button">
           {isImporting ? "Importing folder..." : "Import photos folder"}
           <input
@@ -458,7 +461,7 @@ export default function CatalogMaker({
       </section>
 
       <div className="catalog-maker-bottom">
-        <span>{crackerCatalog.length} products will be arranged by category in the {pdfPageCount}-page PDF.</span>
+        <span>{products.length} products will be arranged by category in the {pdfPageCount}-page PDF.</span>
         <button className="catalog-download" type="button" onClick={handleDownload} disabled={isDownloading}>
           {isDownloading ? "Preparing PDF..." : "Download category price list"}
         </button>

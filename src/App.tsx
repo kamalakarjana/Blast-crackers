@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { jsPDF } from "jspdf";
 import CatalogMaker from "./CatalogMaker";
 import { crackerCatalog } from "./crackerCatalog";
@@ -26,6 +26,12 @@ type Offer = {
   discount: number;
   enabled: boolean;
 };
+type CategoryOffer = {
+  id: string;
+  category: string;
+  percent: number;
+  enabled: boolean;
+};
 const parsePrice = (value: string | null) => Number(String(value ?? "0").replace(/[^0-9]/g, "")) || 0;
 const seed: Product[] = crackerCatalog.map((item, index) => ({
   id: index + 1,
@@ -36,6 +42,41 @@ const seed: Product[] = crackerCatalog.map((item, index) => ({
   image: productImagePaths[String(index + 1)] ?? "https://images.unsplash.com/photo-1533230399637-4f2a1d9d4f0c?auto=format&fit=crop&w=160&q=80",
 }));
 const defaultCategories = Array.from(new Set(crackerCatalog.map((item) => item.category)));
+const isProductList = (value: unknown): value is Product[] =>
+  Array.isArray(value) && value.every((product) =>
+    product && typeof product === "object"
+    && Number.isSafeInteger(product.id)
+    && typeof product.name === "string"
+    && typeof product.category === "string"
+    && Number.isSafeInteger(product.price)
+    && typeof product.pack === "string"
+    && typeof product.image === "string",
+  );
+const isCategoryOfferList = (value: unknown): value is CategoryOffer[] => {
+  if (!Array.isArray(value) || value.length > 200) return false;
+  const categories = new Set<string>();
+  const ids = new Set<string>();
+  return value.every((offer) => {
+    if (!offer || typeof offer !== "object") return false;
+    const candidate = offer as Record<string, unknown>;
+    if (
+      typeof candidate.id !== "string"
+      || !/^[a-zA-Z0-9_-]{1,80}$/.test(candidate.id)
+      || ids.has(candidate.id)
+      || typeof candidate.category !== "string"
+      || !candidate.category.trim()
+      || candidate.category.length > 100
+      || categories.has(candidate.category)
+      || !Number.isSafeInteger(candidate.percent)
+      || Number(candidate.percent) < 1
+      || Number(candidate.percent) > 90
+      || typeof candidate.enabled !== "boolean"
+    ) return false;
+    ids.add(candidate.id);
+    categories.add(candidate.category);
+    return true;
+  });
+};
 const categoryIconByName: Record<string, string> = {
   "Sparklers": "sparkler",
   "Twinkling Stars": "star",
@@ -65,10 +106,23 @@ const getInitialProducts = () => {
     .filter((product) => pdfCategories.has(product.category))
     .map(migrateFamilyPack);
   const savedById = new Map(savedPdfProducts.map((product) => [product.id, product]));
-  return [
+  const products = [
     ...seed.map((product) => savedById.get(product.id) ?? product),
     ...savedPdfProducts.filter((product) => !seed.some((seedProduct) => seedProduct.id === product.id)),
   ];
+  const ids = new Set<number>();
+  let nextId = Math.max(...seed.map((product) => product.id));
+  return products.map((product) => {
+    if (Number.isSafeInteger(product.id) && product.id > 0 && product.id <= 1_000_000 && !ids.has(product.id)) {
+      ids.add(product.id);
+      return product;
+    }
+    while (ids.has(nextId)) nextId += 1;
+    const migrated = { ...product, id: nextId };
+    ids.add(nextId);
+    nextId += 1;
+    return migrated;
+  });
 };
 const defaultOffers: Offer[] = [
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, enabled: true },
@@ -85,6 +139,52 @@ const getApplicableOffer = (subtotal: number, customer: CustomerIdentity | null,
     : offers.find((item) => item.enabled && subtotal >= item.threshold && orderCount > 0);
   return offer ? { ...offer, discount: Math.min(offer.discount, subtotal) } : undefined;
 };
+const getCategoryOffer = (category: string, offers: CategoryOffer[]) =>
+  offers.find((offer) => offer.enabled && offer.category === category);
+const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
+  const offer = getCategoryOffer(product.category, offers);
+  return offer ? Math.round(product.price * (100 - offer.percent) / 100) : product.price;
+};
+const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
+const categoryFromRoute = (categories: string[]) => {
+  const prefix = "#/category/";
+  if (!window.location.hash.startsWith(prefix)) return undefined;
+  try {
+    const requestedCategory = decodeURIComponent(window.location.hash.slice(prefix.length));
+    return categories.includes(requestedCategory) ? requestedCategory : undefined;
+  } catch {
+    return undefined;
+  }
+};
+async function prepareProductImage(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+  if (file.size > 15 * 1024 * 1024) throw new Error("Choose an image smaller than 15 MB.");
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, 320 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Your browser could not prepare this image.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.62);
+  } finally {
+    bitmap.close();
+  }
+}
+async function saveUploadedProductImage(productId: number, data: string): Promise<string> {
+  const response = await fetch("/api/product-images", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ productId, data }),
+  });
+  const result = await readApiResult<{ image?: string }>(response);
+  if (!result.image) throw new Error("The product image could not be saved.");
+  return result.image;
+}
 const rewardCopy = (tier: RewardTier) => [
   tier.candleValue > 0 ? `₹${tier.candleValue} candle gift` : "",
   tier.crackerValue > 0 ? `₹${tier.crackerValue} cracker gift` : "",
@@ -147,6 +247,7 @@ async function saveCustomerCart(cart: CartItem[]) {
 type View = "customer-auth" | "admin-login" | "shop" | "cart" | "catalogue" | "admin-customers" | "offers" | "order-entry" | "pdf-builder" | "about" | "contact";
 const routeForView = (view: View) => ({ "customer-auth": "#/login", "admin-login": "#/admin/login", shop: "#/", cart: "#/cart", catalogue: "#/admin", "admin-customers": "#/admin/customers", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder", about: "#/about", contact: "#/contact" })[view];
 const viewForRoute = (): View => {
+  if (window.location.hash.startsWith("#/category/")) return "shop";
   return ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/admin": "catalogue", "#/admin/customers": "admin-customers", "#/admin/login": "admin-login", "#/offers": "offers", "#/login": "customer-auth", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder", "#/about": "about", "#/contact": "contact" } as Record<string, View>)[window.location.hash] || "shop";
 };
 const downloadCartPdf = (
@@ -155,6 +256,7 @@ const downloadCartPdf = (
   total: number,
   offer?: Offer,
   rewards: string[] = [],
+  categorySavings = 0,
 ) => {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
@@ -255,6 +357,7 @@ const downloadCartPdf = (
 
   const summaryLines = [
     { label: "Subtotal", value: pdfMoney(subtotal) },
+    ...(categorySavings ? [{ label: "Category offers", value: `-${pdfMoney(categorySavings)}` }] : []),
     ...(offer ? [{ label: offer.title, value: `-${pdfMoney(offer.discount)}` }] : []),
   ];
   const rewardText = rewards.map((reward) => pdf.splitTextToSize(`- ${pdfText(reward)}`, pageWidth - margin * 2 - 4));
@@ -391,16 +494,18 @@ function CategoryIcon({ category }: { category: string }) {
 function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [productStorageError, setProductStorageError] = useState("");
+  const [productsReady, setProductsReady] = useState(false);
   const [cart, setCart] = useState<CartItem[]>(() =>
     readStorage<CartItem[]>("blast-cart-guest", readStorage<CartItem[]>("blast-cart", [])).map(migrateFamilyPack),
   );
-  const categories = defaultCategories;
+  const categories = useMemo(() => Array.from(new Set(products.map((product) => product.category).filter(Boolean))), [products]);
   const [offers, setOffers] = useState<Offer[]>(() => readStorage<Array<Offer & { id: string }>>("blast-offers", defaultOffers).filter((offer) => offer.id === "repeat-order"));
+  const [categoryOffers, setCategoryOffers] = useState<CategoryOffer[]>([]);
   const [rewardTiers, setRewardTiers] = useState<RewardTier[]>(initialRewardTiers);
   const [rewardTiersError, setRewardTiersError] = useState("");
   const [orderCount, setOrderCount] = useState(() => readStorage<number>("blast-order-count", 0));
   const [category, setCategory] = useState(() => {
-    return defaultCategories.includes("Sparklers") ? "Sparklers" : defaultCategories[0] || "";
+    return categoryFromRoute(defaultCategories) || (defaultCategories.includes("Sparklers") ? "Sparklers" : defaultCategories[0] || "");
   });
   const [view, setView] = useState<View>(() => viewForRoute());
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -421,10 +526,76 @@ function App() {
     return save;
   };
   useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/catalogue")
+      .then(async (response) => {
+        const result = await readApiResult<{ products: unknown; categoryOffers: unknown }>(response);
+        const savedProducts = result.products;
+        const savedCategoryOffers = result.categoryOffers;
+        if (!isProductList(savedProducts) || !isCategoryOfferList(savedCategoryOffers)) {
+          throw new Error("Saved catalogue or category offers from the server are invalid.");
+        }
+        return { products: savedProducts, categoryOffers: savedCategoryOffers };
+      })
+      .then((result) => {
+        if (cancelled) return;
+        if (result.products.length) {
+          setProducts((current) => [
+            ...current.filter((product) => seed.some((builtIn) => builtIn.id === product.id)),
+            ...result.products.map(migrateFamilyPack),
+          ]);
+        }
+        setCategoryOffers(result.categoryOffers);
+        const requestedCategory = categoryFromRoute([...defaultCategories, ...result.products.map((product) => product.category)]);
+        if (requestedCategory) setCategory(requestedCategory);
+        setProductsReady(true);
+        setProductStorageError("");
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setProductsReady(true);
+          setProductStorageError(cause instanceof Error ? cause.message : "The catalogue could not be loaded from the server.");
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    if (!productsReady || !adminAuthenticated) return;
+    const timer = window.setTimeout(() => {
+      const savedProducts = products.filter((product) => !seed.some((builtIn) => builtIn.id === product.id));
+      void Promise.all(savedProducts.map(async (product) => {
+        if (!product.image.startsWith("data:")) return product;
+        const imageBlob = await (await fetch(product.image)).blob();
+        const image = await prepareProductImage(new File([imageBlob], "product-image.jpg", { type: imageBlob.type || "image/jpeg" }));
+        return { ...product, image: await saveUploadedProductImage(product.id, image) };
+      })).then(async (compressedProducts) => {
+        const response = await fetch("/api/catalogue", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ products: compressedProducts, categoryOffers }),
+        });
+        const result = await readApiResult<{ products: unknown; categoryOffers: unknown }>(response);
+        if (!isProductList(result.products) || !isCategoryOfferList(result.categoryOffers)) {
+          throw new Error("The server returned an invalid saved catalogue.");
+        }
+        if (compressedProducts.some((product, index) => product.image !== savedProducts[index].image)) {
+          setProducts((current) => current.map((product) => {
+            const saved = compressedProducts.find((item) => item.id === product.id);
+            return saved ? { ...product, image: saved.image } : product;
+          }));
+        }
+        setProductStorageError("");
+      }).catch((cause: unknown) => {
+        setProductStorageError(cause instanceof Error ? cause.message : "Catalogue changes could not be saved to the server.");
+      });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [products, categoryOffers, productsReady, adminAuthenticated]);
+  useEffect(() => {
     try {
       localStorage.setItem("blast-products", JSON.stringify(products));
     } catch {
-      setProductStorageError("This browser could not save the product photo. Free up browser storage and try again.");
+      window.setTimeout(() => setProductStorageError("This browser could not save product details locally. Free up browser storage and try again."), 0);
     }
   }, [products]);
   useEffect(() => {
@@ -541,8 +712,10 @@ function App() {
     (sum, item) => sum + item.price * item.quantity,
     0,
   );
-  const activeOffer = getApplicableOffer(subtotal, user, offers, orderCount);
-  const total = Math.max(0, subtotal - (activeOffer?.discount || 0));
+  const categorySavings = cart.reduce((sum, item) =>
+    sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
+  const activeOffer = getApplicableOffer(Math.max(0, subtotal - categorySavings), user, offers, orderCount);
+  const total = Math.max(0, subtotal - categorySavings - (activeOffer?.discount || 0));
   const earnedRewardTiers = getEarnedRewards(rewardTiers, subtotal);
   const rewardCandleValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.candleValue, 0);
   const rewardCrackerValue = earnedRewardTiers.reduce((sum, tier) => sum + tier.crackerValue, 0);
@@ -578,8 +751,9 @@ function App() {
   const setShopView = (nextCategory?: string) => navigate("shop", nextCategory);
   const scrollToCategory = (nextCategory: string) => {
     setCategory(nextCategory);
+    window.history.pushState({}, "", routeForCategory(nextCategory));
     if (view !== "shop") {
-      navigate("shop", nextCategory);
+      setView("shop");
       window.setTimeout(() => {
         document.getElementById(`category-${categories.indexOf(nextCategory)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 0);
@@ -588,11 +762,23 @@ function App() {
     document.getElementById(`category-${categories.indexOf(nextCategory)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   useEffect(() => {
-    const syncRoute = () => setView(viewForRoute());
+    const syncRoute = () => {
+      setView(viewForRoute());
+      const nextCategory = categoryFromRoute(categories);
+      if (nextCategory) setCategory(nextCategory);
+    };
     window.addEventListener("popstate", syncRoute);
     window.addEventListener("hashchange", syncRoute);
     return () => { window.removeEventListener("popstate", syncRoute); window.removeEventListener("hashchange", syncRoute); };
-  }, []);
+  }, [categories]);
+  useEffect(() => {
+    const requestedCategory = categoryFromRoute(categories);
+    if (requestedCategory) {
+      window.setTimeout(() => {
+        document.getElementById(`category-${categories.indexOf(requestedCategory)}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
+    }
+  }, [productsReady, categories]);
   useEffect(() => {
     if (view !== "shop") return;
     const sections = document.querySelectorAll<HTMLElement>(".category-section");
@@ -634,7 +820,7 @@ function App() {
       const response = await fetch("/api/customer-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cart, discount: activeOffer?.discount || 0 }),
+        body: JSON.stringify({ cart, discount: categorySavings + (activeOffer?.discount || 0) }),
       });
       const result = await readApiResult<{ orderId: string }>(response);
       setPendingOrderId(result.orderId);
@@ -674,7 +860,7 @@ function App() {
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
-    downloadCartPdf(cart, subtotal, total, activeOffer, rewards);
+    downloadCartPdf(cart, subtotal, total, activeOffer, rewards, categorySavings);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -692,7 +878,9 @@ function App() {
     navigate(authReturnTo);
     if (pendingPdfDownload) {
       const cartSubtotal = restoredCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const customerOffer = getApplicableOffer(cartSubtotal, identity, offers, orderCount);
+      const savedCategorySavings = restoredCart.reduce((sum, item) =>
+        sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
+      const customerOffer = getApplicableOffer(Math.max(0, cartSubtotal - savedCategorySavings), identity, offers, orderCount);
       const earned = getEarnedRewards(rewardTiers, cartSubtotal);
       const rewards = [
         earned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
@@ -703,7 +891,7 @@ function App() {
           : "",
         ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
       ].filter(Boolean);
-      downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - (customerOffer?.discount || 0)), customerOffer, rewards);
+      downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings);
       setPendingPdfDownload(false);
     }
   };
@@ -866,6 +1054,7 @@ function App() {
               </div>
               <button type="button" onClick={() => navigate("offers")}>View all offers →</button>
             </section>
+            {productStorageError && <p className="reward-api-error" role="alert">{productStorageError}</p>}
             <RewardProgress
               subtotal={subtotal}
               earnedCandleValue={rewardCandleValue}
@@ -894,6 +1083,7 @@ function App() {
                   </div>
                   {products.filter((product) => product.category === categoryName).map((product) => {
                     const quantity = cart.find((item) => item.id === product.id)?.quantity || 0;
+                    const offerPrice = getProductOfferPrice(product, categoryOffers);
                     return (
                       <div className="product-row" key={product.id}>
                         <span>#{product.id}</span>
@@ -904,7 +1094,11 @@ function App() {
                             {product.pack && <small>{product.pack}</small>}
                           </div>
                         </div>
-                        <strong className="best-price">{money(product.price)}</strong>
+                        <strong className="best-price">
+                          {offerPrice < product.price
+                            ? <><del>{money(product.price)}</del><span className="category-sale-price">{money(offerPrice)} <small>{getCategoryOffer(categoryName, categoryOffers)?.percent}% off</small></span></>
+                            : money(product.price)}
+                        </strong>
                         <div className="stepper">
                           <button type="button" aria-label={`Decrease quantity for ${product.name}`} onClick={() => changeQuantity(product, -1)}>−</button>
                           <input
@@ -916,7 +1110,7 @@ function App() {
                           />
                           <button type="button" aria-label={`Increase quantity for ${product.name}`} onClick={() => changeQuantity(product, 1)}>+</button>
                         </div>
-                        <strong>{money(product.price * quantity)}</strong>
+                        <strong>{money(offerPrice * quantity)}</strong>
                       </div>
                     );
                   })}
@@ -931,6 +1125,8 @@ function App() {
           cart={cart}
           subtotal={subtotal}
           total={total}
+          categoryOffers={categoryOffers}
+          categorySavings={categorySavings}
           offer={activeOffer}
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
@@ -943,7 +1139,7 @@ function App() {
           onCheckout={startPayment}
         />
       )}
-      {renderedView === "offers" && <OffersPage offers={offers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
+      {renderedView === "offers" && <OffersPage offers={offers} categoryOffers={categoryOffers} rewardTiers={rewardTiers} rewardTiersError={rewardTiersError} onBack={() => setShopView()} />}
       {renderedView === "order-entry" && (
         <OrderEntry products={products} onSubmit={(selections) => { submitOrderSelections(selections); openCart(true); }} onCart={() => openCart()} />
       )}
@@ -970,6 +1166,9 @@ function App() {
           categories={categories}
           offers={offers}
           setOffers={setOffers}
+          categoryOffers={categoryOffers}
+          onSaveCategoryOffers={setCategoryOffers}
+          catalogueError={productStorageError}
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           onSaveRewardTiers={(tiers) => {
@@ -1044,7 +1243,7 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
   const [quantity, setQuantity] = useState(1);
   const [message, setMessage] = useState("");
   const [selections, setSelections] = useState<OrderSelection[]>([]);
-  const selected = products[Number(productId) - 1];
+  const selected = products.find((product) => product.id === Number(productId));
   const addItem = (event: FormEvent) => {
     event.preventDefault();
     if (!selected || quantity < 1) { setMessage("Enter a valid product ID and quantity."); return; }
@@ -1055,10 +1254,10 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
     setProductId("");
     setQuantity(1);
   };
-  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={products.length} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{Number(productId)} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{products.indexOf(item.product) + 1}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product, index) => <div className="entry-product" key={product.id}><b>#{index + 1}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
+  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={Math.max(1, ...products.map((product) => product.id))} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{selected.id} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{item.product.id}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product) => <div className="entry-product" key={product.id}><b>#{product.id}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
-function OffersPage({ offers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
+function OffersPage({ offers, categoryOffers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; categoryOffers: CategoryOffer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
   return (
     <main className="offers-page">
       <button className="back-link" onClick={onBack}>← Continue shopping</button>
@@ -1067,6 +1266,12 @@ function OffersPage({ offers, rewardTiers, rewardTiersError, onBack }: { offers:
       <p className="offers-intro">Shopping rewards and eligible repeat-order discounts are applied when your cart meets the conditions.</p>
       {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
       <div className="offer-cards">
+        {categoryOffers.filter((offer) => offer.enabled).map((offer) => (
+          <article className="offer-card" key={offer.id}>
+            <span className="offer-card-mark">{offer.percent}% OFF</span>
+            <div><p className="offer-card-kicker">CATEGORY OFFER</p><h2>{offer.category}</h2><p>Save {offer.percent}% on every item in this category.</p></div>
+          </article>
+        ))}
         {offers.filter((offer) => offer.enabled).map((offer) => (
           <article className="offer-card" key={offer.id}>
             <span className="offer-card-mark">-{money(offer.discount)}</span>
@@ -1141,6 +1346,8 @@ function Cart({
   cart,
   subtotal,
   total,
+  categoryOffers,
+  categorySavings,
   offer,
   rewardTiers,
   rewardTiersError,
@@ -1155,6 +1362,8 @@ function Cart({
   cart: CartItem[];
   subtotal: number;
   total: number;
+  categoryOffers: CategoryOffer[];
+  categorySavings: number;
   offer?: Offer;
   rewardTiers: RewardTier[];
   rewardTiersError: string;
@@ -1215,14 +1424,19 @@ function Cart({
                 />
                 <div>
                   <strong>{item.name}</strong>
-                  <small>{money(item.price)}{item.pack ? ` / ${item.pack}` : ""}</small>
+                  <small>
+                    {getProductOfferPrice(item, categoryOffers) < item.price
+                      ? <><del>{money(item.price)}</del> {money(getProductOfferPrice(item, categoryOffers))} ({getCategoryOffer(item.category, categoryOffers)?.percent}% off)</>
+                      : money(item.price)}
+                    {item.pack ? ` / ${item.pack}` : ""}
+                  </small>
                 </div>
                 <div className="stepper">
                   <button type="button" aria-label={`Decrease quantity for ${item.name}`} onClick={() => onChange(item, -1)}>−</button>
                   <span>{item.quantity}</span>
                   <button type="button" aria-label={`Increase quantity for ${item.name}`} onClick={() => onChange(item, 1)}>+</button>
                 </div>
-                <strong>{money(item.price * item.quantity)}</strong>
+                <strong>{money(getProductOfferPrice(item, categoryOffers) * item.quantity)}</strong>
               </div>
             ))
           )}
@@ -1232,6 +1446,7 @@ function Cart({
           <p>
             Subtotal <b>{money(subtotal)}</b>
           </p>
+          {categorySavings > 0 && <p className="discount">Category offers <b>-{money(categorySavings)}</b></p>}
           {offer && (
             <p className="discount">
               {offer.title} <b>-{money(offer.discount)}</b>
@@ -1762,6 +1977,9 @@ function Catalogue({
   categories,
   offers,
   setOffers,
+  categoryOffers,
+  onSaveCategoryOffers,
+  catalogueError,
   rewardTiers,
   rewardTiersError,
   onSaveRewardTiers,
@@ -1776,6 +1994,9 @@ function Catalogue({
   categories: string[];
   offers: Offer[];
   setOffers: (offers: Offer[]) => void;
+  categoryOffers: CategoryOffer[];
+  onSaveCategoryOffers: (offers: CategoryOffer[]) => void;
+  catalogueError: string;
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   onSaveRewardTiers: (tiers: RewardTier[]) => void;
@@ -1795,10 +2016,23 @@ function Catalogue({
   };
   const [draft, setDraft] = useState<Product>(empty);
   const [editing, setEditing] = useState<number | null>(null);
+  const [productError, setProductError] = useState("");
+  const [newOfferCategory, setNewOfferCategory] = useState("");
+  const [newOfferPercent, setNewOfferPercent] = useState(10);
+  const [offerError, setOfferError] = useState("");
   const save = () => {
-    if (!draft.name || draft.price <= 0 || !draft.pack)
+    if (!draft.name.trim() || !draft.category.trim() || !Number.isSafeInteger(draft.price) || draft.price <= 0) {
+      setProductError("Enter a product name, category, and whole-number price greater than zero.");
       return;
-    const saved = editing === null ? { ...draft, id: Date.now() } : draft;
+    }
+    if (draft.category.length > 100 || draft.name.length > 160 || draft.pack.length > 160) {
+      setProductError("Keep the product name and pack details under 160 characters and category under 100 characters.");
+      return;
+    }
+    setProductError("");
+    const saved = editing === null
+      ? { ...draft, name: draft.name.trim(), category: draft.category.trim(), id: Math.max(0, ...products.map((product) => product.id)) + 1 }
+      : { ...draft, name: draft.name.trim(), category: draft.category.trim() };
     setProducts(
       editing === null
         ? [...products, saved]
@@ -1806,6 +2040,23 @@ function Catalogue({
     );
     setDraft(empty);
     setEditing(null);
+  };
+  const addCategoryOffer = () => {
+    if (!newOfferCategory || !Number.isInteger(newOfferPercent) || newOfferPercent < 1 || newOfferPercent > 90) {
+      setOfferError("Choose a category and set a discount from 1% to 90%.");
+      return;
+    }
+    if (categoryOffers.some((offer) => offer.category === newOfferCategory)) {
+      setOfferError("This category already has an offer. Edit the existing offer below.");
+      return;
+    }
+    onSaveCategoryOffers([...categoryOffers, {
+      id: `category-${Date.now()}`,
+      category: newOfferCategory,
+      percent: newOfferPercent,
+      enabled: true,
+    }]);
+    setOfferError("");
   };
   const edit = (product: Product) => {
     setDraft(product);
@@ -1847,14 +2098,18 @@ function Catalogue({
           </label>
           <label>
             Category
-            <select
+            <input
+              list="product-categories"
               value={draft.category}
               onChange={(event) =>
                 setDraft({ ...draft, category: event.target.value })
               }
-            >
-              {categories.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
+              placeholder="Choose an existing category or enter a new one"
+              maxLength={100}
+            />
+            <datalist id="product-categories">
+              {categories.map((item) => <option key={item} value={item} />)}
+            </datalist>
           </label>
           <label>
             Pack detail
@@ -1884,10 +2139,12 @@ function Catalogue({
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
-                const reader = new FileReader();
-                reader.onload = () =>
-                  setDraft({ ...draft, image: String(reader.result) });
-                reader.readAsDataURL(file);
+                void prepareProductImage(file).then((image) => {
+                  setDraft((current) => ({ ...current, image }));
+                  setProductError("");
+                }).catch((cause: unknown) => {
+                  setProductError(cause instanceof Error ? cause.message : "Product image could not be prepared.");
+                });
               }}
             />
           </label>
@@ -1902,6 +2159,8 @@ function Catalogue({
             />
           </label>
         </div>
+        {productError && <p className="form-error" role="alert">{productError}</p>}
+        {catalogueError && <p className="reward-api-error" role="alert">{catalogueError}</p>}
         <button className="save-product" onClick={save}>
           {editing === null ? "Add product" : "Save product"} →
         </button>
@@ -1918,7 +2177,7 @@ function Catalogue({
         )}
       </section>
       <section className="admin-products category-manager">
-        <div className="admin-products-head"><h2>PDF categories</h2><span>{categories.length} categories</span></div>
+        <div className="admin-products-head"><h2>Store categories</h2><span>{categories.length} categories · new categories appear in shop navigation automatically</span></div>
         {categories.map((item) => <div className="admin-category-row" key={item}><strong>{item}</strong></div>)}
       </section>
       <RewardTierManager
@@ -1940,6 +2199,24 @@ function Catalogue({
             <p className="offer-admin-note">Runs on orders after the first completed purchase.</p>
           </div>
         ))}
+        <div className="offer-editor">
+          <div className="offer-editor-heading"><strong>Category percentage offers</strong></div>
+          <p className="offer-admin-note">Discounts apply to every item in the selected category and appear on the shop, cart, and order summary.</p>
+          <div className="offer-editor-grid">
+            <label>Category<select value={newOfferCategory} onChange={(event) => setNewOfferCategory(event.target.value)}><option value="">Choose category</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+            <label>Discount (%)<input type="number" min="1" max="90" step="1" value={newOfferPercent} onChange={(event) => setNewOfferPercent(Number(event.target.value))} /></label>
+            <button type="button" className="save-product" onClick={addCategoryOffer}>Add category offer →</button>
+          </div>
+          {offerError && <p className="form-error" role="alert">{offerError}</p>}
+          {categoryOffers.map((offer) => (
+            <div className="offer-editor-heading category-offer-row" key={offer.id}>
+              <strong>{offer.category} · {offer.percent}% off</strong>
+              <label className="offer-toggle"><input type="checkbox" checked={offer.enabled} onChange={(event) => onSaveCategoryOffers(categoryOffers.map((item) => item.id === offer.id ? { ...item, enabled: event.target.checked } : item))} /> Enabled</label>
+              <label className="category-offer-percent">Discount (%)<input type="number" min="1" max="90" step="1" value={offer.percent} onChange={(event) => onSaveCategoryOffers(categoryOffers.map((item) => item.id === offer.id ? { ...item, percent: Number(event.target.value) } : item))} /></label>
+              <button type="button" className="catalog-remove-photo" onClick={() => onSaveCategoryOffers(categoryOffers.filter((item) => item.id !== offer.id))}>Remove</button>
+            </div>
+          ))}
+        </div>
       </section>
       <section className="admin-products">
         <div className="admin-products-head">
