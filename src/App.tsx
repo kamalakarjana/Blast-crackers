@@ -139,6 +139,26 @@ const defaultOffers: Offer[] = [
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+const upiId = "9000488963@ybl";
+const getUpiPaymentUri = (total: number) =>
+  `upi://pay?pa=${upiId}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
+const getUpiQrCodeUrl = (total: number) =>
+  `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(getUpiPaymentUri(total))}`;
+const loadUpiQrCode = async (total: number) => {
+  const response = await fetch(getUpiQrCodeUrl(total));
+  if (!response.ok) throw new Error("The UPI QR code could not be loaded for the order PDF.");
+  const image = await response.blob();
+  if (!image.type.startsWith("image/")) throw new Error("The UPI QR code service returned an invalid image.");
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("The UPI QR code image could not be prepared for the PDF."));
+    };
+    reader.onerror = () => reject(new Error("The UPI QR code image could not be read for the PDF."));
+    reader.readAsDataURL(image);
+  });
+};
 const getEarnedRewards = (tiers: RewardTier[], subtotal: number) =>
   tiers
     .filter((tier) => tier.enabled && tier.threshold <= subtotal)
@@ -278,14 +298,16 @@ const viewForRoute = (): View => {
   if (window.location.hash.startsWith("#/category/")) return "shop";
   return ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/admin": "catalogue", "#/admin/customers": "admin-customers", "#/admin/login": "admin-login", "#/offers": "offers", "#/login": "customer-auth", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder", "#/about": "about", "#/contact": "contact" } as Record<string, View>)[window.location.hash] || "shop";
 };
-const downloadCartPdf = (
+const downloadCartPdf = async (
   cart: CartItem[],
   subtotal: number,
   total: number,
   offer?: Offer,
   rewards: string[] = [],
   categorySavings = 0,
-) => {
+  categoryOffers: CategoryOffer[] = [],
+) : Promise<void> => {
+  const qrCodeData = await loadUpiQrCode(total);
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -304,7 +326,7 @@ const downloadCartPdf = (
     stripe: [248, 249, 245],
     white: [255, 255, 255],
   };
-  const columnWidths = [12, 90, 16, 36, 36];
+  const columnWidths = [10, 65, 13, 28, 34, 40];
   const columnX = columnWidths.reduce<number[]>((positions, width) => {
     positions.push((positions.at(-1) ?? margin) + width);
     return positions;
@@ -332,7 +354,7 @@ const downloadCartPdf = (
     pdf.setTextColor(...colors.white as [number, number, number]);
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(7);
-    ["NO.", "ITEM NAME", "QTY", "UNIT PRICE", "AMOUNT"].forEach((label, index) => {
+    ["NO.", "ITEM NAME", "QTY", "UNIT PRICE", "DISCOUNT", "AMOUNT"].forEach((label, index) => {
       const align = index >= 2 ? "right" : "left";
       const x = align === "right" ? columnX[index] + columnWidths[index] - 2 : columnX[index] + 2;
       pdf.text(label, x, tableHeaderY + 5.3, { align });
@@ -377,9 +399,19 @@ const downloadCartPdf = (
     pdf.setFontSize(7.5);
     pdf.text(String(item.quantity), columnX[2] + columnWidths[2] - 2, y + 5.2, { align: "right" });
     pdf.text(pdfMoney(item.price), columnX[3] + columnWidths[3] - 2, y + 5.2, { align: "right" });
+    const discountPercent = getProductOfferPercent(item, categoryOffers);
+    const discountAmount = item.price - getProductOfferPrice(item, categoryOffers);
+    pdf.setFont("helvetica", discountPercent ? "bold" : "normal");
+    pdf.setTextColor(...(discountPercent ? colors.emerald : colors.muted) as [number, number, number]);
+    pdf.text(
+      discountPercent ? `${discountPercent}% (${pdfMoney(discountAmount)})` : "—",
+      columnX[4] + columnWidths[4] - 2,
+      y + 5.2,
+      { align: "right" },
+    );
     pdf.setFont("helvetica", "bold");
     pdf.setTextColor(...colors.emerald as [number, number, number]);
-    pdf.text(pdfMoney(item.price * item.quantity), columnX[4] + columnWidths[4] - 2, y + 5.2, { align: "right" });
+    pdf.text(pdfMoney(item.price * item.quantity), columnX[5] + columnWidths[5] - 2, y + 5.2, { align: "right" });
     y += rowHeight;
   });
 
@@ -440,6 +472,29 @@ const downloadCartPdf = (
     pdf.setTextColor(...colors.muted as [number, number, number]);
     pdf.text(rewardTermsText, margin + 2, y);
   }
+  const paymentSectionHeight = 42;
+  if (y + paymentSectionHeight > pageHeight - 14) {
+    startNewPage();
+    y += 6;
+  } else {
+    y += rewards.length ? 7 : 12;
+  }
+  pdf.setFillColor(...colors.white as [number, number, number]);
+  pdf.setDrawColor(...colors.grid as [number, number, number]);
+  pdf.roundedRect(margin, y, pageWidth - margin * 2, paymentSectionHeight, 2, 2, "FD");
+  pdf.addImage(qrCodeData, "PNG", margin + 4, y + 4, 34, 34);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(9);
+  pdf.setTextColor(...colors.deepEmerald as [number, number, number]);
+  pdf.text("SCAN TO PAY WITH UPI", margin + 44, y + 11);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(8);
+  pdf.setTextColor(...colors.ink as [number, number, number]);
+  pdf.text(`UPI ID: ${upiId}`, margin + 44, y + 19);
+  pdf.text(`Amount: ${pdfMoney(total)}`, margin + 44, y + 26);
+  pdf.setFontSize(6.5);
+  pdf.setTextColor(...colors.muted as [number, number, number]);
+  pdf.text("Scan this QR code using any UPI app. Please verify the payee and amount before paying.", margin + 44, y + 33);
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
     pdf.setPage(page);
@@ -999,7 +1054,7 @@ function App() {
       setCustomerDetailsOpen(true);
     }
   };
-  const downloadPdfAfterAuth = () => {
+  const downloadPdfAfterAuth = async () => {
     if (!user) {
       setAuthReturnTo("cart");
       setPendingPdfDownload(true);
@@ -1016,7 +1071,7 @@ function App() {
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
-    downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings);
+    await downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings, categoryOffers);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -1052,7 +1107,10 @@ function App() {
           : "",
         ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
       ].filter(Boolean);
-      downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings);
+      await downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings, categoryOffers)
+        .catch((cause: unknown) => {
+          setCartError(cause instanceof Error ? cause.message : "The order PDF could not be generated.");
+        });
       setPendingPdfDownload(false);
     }
   };
@@ -1592,9 +1650,10 @@ function Cart({
   onBack: () => void;
   user: boolean;
   onLogin: () => void;
-  onDownloadPdf: () => void;
+  onDownloadPdf: () => Promise<void>;
   onCheckout: () => void;
 }) {
+  const [pdfError, setPdfError] = useState("");
   const earned = getEarnedRewards(rewardTiers, targetOfferSpend);
   const earnedCandleValue = earned.reduce((sum, tier) => sum + tier.candleValue, 0);
   const earnedCrackerValue = earned.reduce((sum, tier) => sum + tier.crackerValue, 0);
@@ -1614,11 +1673,17 @@ function Cart({
         <button
           className="download-pdf"
           disabled={!cart.length}
-          onClick={onDownloadPdf}
+          onClick={() => {
+            setPdfError("");
+            void onDownloadPdf().catch((cause: unknown) => {
+              setPdfError(cause instanceof Error ? cause.message : "The order PDF could not be generated.");
+            });
+          }}
         >
           Download PDF
         </button>
       </div>
+      {pdfError && <p className="form-error" role="alert">{pdfError}</p>}
       <div className="cart-grid">
         <section>
           {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
@@ -1784,9 +1849,7 @@ function Auth({
 }
 
 function PaymentModal({ total, error, onClose, onPaid }: { total: number; error: string; onClose: () => void; onPaid: () => void }) {
-  const upiId = "9000488963@ybl";
-  const paymentUri = `upi://pay?pa=${upiId}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
-  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(paymentUri)}`;
+  const qrCodeUrl = getUpiQrCodeUrl(total);
   const copyUpi = async () => {
     await navigator.clipboard?.writeText(upiId);
     alert("UPI number copied.");
