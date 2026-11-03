@@ -151,7 +151,8 @@ const getProductOfferPrice = (product: Product, offers: CategoryOffer[]) => {
   const percent = getProductOfferPercent(product, offers);
   return percent ? Math.round(product.price * (100 - percent) / 100) : product.price;
 };
-const countsTowardTargetOffers = (product: Product) => product.countsTowardTargetOffers !== false;
+const countsTowardTargetOffers = (product: Product, offers: CategoryOffer[]) =>
+  getProductOfferPercent(product, offers) === 0;
 const routeForCategory = (category: string) => `#/category/${encodeURIComponent(category)}`;
 const categoryFromRoute = (categories: string[]) => {
   const prefix = "#/category/";
@@ -726,7 +727,7 @@ function App() {
   const categorySavings = currentCart.reduce((sum, item) =>
     sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
   const targetOfferSpend = currentCart.reduce((sum, item) =>
-    sum + (countsTowardTargetOffers(item) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
+    sum + (countsTowardTargetOffers(item, categoryOffers) ? item.price * item.quantity : 0), 0);
   const activeOffer = getApplicableOffer(Math.max(0, subtotal - categorySavings), user, offers, orderCount);
   const total = Math.max(0, subtotal - categorySavings - (activeOffer?.discount || 0));
   const earnedRewardTiers = getEarnedRewards(rewardTiers, targetOfferSpend);
@@ -898,7 +899,7 @@ function App() {
         sum + (item.price - getProductOfferPrice(item, categoryOffers)) * item.quantity, 0);
       const customerOffer = getApplicableOffer(Math.max(0, cartSubtotal - savedCategorySavings), identity, offers, orderCount);
       const restoredTargetOfferSpend = restoredCart.reduce((sum, item) =>
-        sum + (countsTowardTargetOffers(item) ? getProductOfferPrice(item, categoryOffers) * item.quantity : 0), 0);
+        sum + (countsTowardTargetOffers(item, categoryOffers) ? item.price * item.quantity : 0), 0);
       const earned = getEarnedRewards(rewardTiers, restoredTargetOfferSpend);
       const rewards = [
         earned.reduce((sum, tier) => sum + tier.candleValue, 0) > 0
@@ -1362,7 +1363,7 @@ function RewardProgress({
       </div>
       {nextTier && <div className="reward-progress-track"><span style={{ width: `${progress}%` }} /></div>}
       {nextTier && <p className="reward-next-benefit">Next: {rewardCopy(nextTier)}</p>}
-      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Discounts are counted; items excluded by the admin do not count.</p>
+      <p className="reward-target-spend">Eligible spend toward target rewards: {money(subtotal)}. Items with an active item or category discount are excluded.</p>
       {earnedRewards.length > 0 && <p className="reward-earned">Unlocked so far: {earnedRewards.join(" + ")}</p>}
     </section>
   );
@@ -2178,16 +2179,7 @@ function Catalogue({
               })}
               placeholder="Leave blank to use category offer"
             />
-            <small>0% means no discount; 10% off ₹100 makes the item ₹90.</small>
-          </label>
-          <label className="product-target-offer-option">
-            <span>Count discounted price toward target rewards</span>
-            <input
-              type="checkbox"
-              checked={draft.countsTowardTargetOffers !== false}
-              onChange={(event) => setDraft({ ...draft, countsTowardTargetOffers: event.target.checked })}
-            />
-            <small>Checked: the discounted selling price counts toward reward targets. Unchecked: the item still gets its discount, but none of its price counts toward reward targets.</small>
+            <small>0% means no discount. Any active item or category discount automatically excludes this product from target rewards.</small>
           </label>
           <label>
             Upload product image
@@ -2295,7 +2287,7 @@ function Catalogue({
             </div>
             <span>{money(product.price)}</span>
             <span>{product.discountPercent === undefined ? "Uses category offer" : `${product.discountPercent}% item offer`}</span>
-            <span>{countsTowardTargetOffers(product) ? "Counts for target offers" : "Excluded from target offers"}</span>
+            <span>{countsTowardTargetOffers(product, categoryOffers) ? "Counts for target rewards" : "Discounted — excluded from rewards"}</span>
             <button onClick={() => edit(product)}>Edit</button>
             <button onClick={() => { if (window.confirm(`Delete ${product.name}?`)) setProducts(products.filter((item) => item.id !== product.id)); }}>Delete</button>
           </div>
