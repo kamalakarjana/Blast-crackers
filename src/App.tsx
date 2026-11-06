@@ -507,6 +507,142 @@ const downloadCartPdf = async (
   }
   pdf.save("SLV_Crackers_Order_Summary.pdf");
 };
+const downloadCatalogPdf = (products: Product[], categoryOffers: CategoryOffer[]) => {
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 9;
+  const columnWidths = [18, 123, 42, 48, 48];
+  const columnX = columnWidths.reduce<number[]>((positions, width) => {
+    positions.push((positions.at(-1) ?? margin) + width);
+    return positions;
+  }, [margin]);
+  const tableHeaderY = 29;
+  const tableHeaderHeight = 8;
+  const bottomLimit = pageHeight - 14;
+  const colors = {
+    emerald: [18, 79, 58] as [number, number, number],
+    deepEmerald: [13, 58, 43] as [number, number, number],
+    gold: [207, 164, 76] as [number, number, number],
+    paleGold: [250, 245, 231] as [number, number, number],
+    lightGold: [229, 214, 178] as [number, number, number],
+    ink: [43, 54, 47] as [number, number, number],
+    muted: [111, 119, 108] as [number, number, number],
+    grid: [222, 224, 214] as [number, number, number],
+    stripe: [248, 249, 245] as [number, number, number],
+    white: [255, 255, 255] as [number, number, number],
+  };
+  const pdfMoney = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+
+  const drawPageHeader = () => {
+    pdf.setFillColor(...colors.deepEmerald);
+    pdf.rect(0, 0, pageWidth, 22, "F");
+    pdf.setFillColor(...colors.gold);
+    pdf.rect(0, 21, pageWidth, 1, "F");
+    pdf.setTextColor(...colors.white);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(17);
+    pdf.text("SLV CRACKERS", pageWidth / 2, 10, { align: "center" });
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text(`CRACKERS CATALOG  |  ${new Date().toLocaleDateString("en-IN")}`, pageWidth / 2, 17, { align: "center" });
+    pdf.setFillColor(...colors.emerald);
+    pdf.rect(margin, tableHeaderY, pageWidth - margin * 2, tableHeaderHeight, "F");
+    pdf.setTextColor(...colors.white);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    ["SN", "ITEM NAME", "ITEM RATE", "OFFER RATE", "FINAL RATE"].forEach((label, index) => {
+      pdf.text(label, columnX[index] + 2, tableHeaderY + 5.3);
+    });
+  };
+
+  drawPageHeader();
+  let y = tableHeaderY + tableHeaderHeight;
+  let rowIndex = 0;
+  const startNewPage = () => {
+    pdf.addPage();
+    drawPageHeader();
+    y = tableHeaderY + tableHeaderHeight;
+  };
+
+  const categories = [...new Set(products.map((product) => product.category))];
+  categories.forEach((category) => {
+    const items = products.filter((product) => product.category === category);
+    const drawCategoryHeader = () => {
+      pdf.setFillColor(...colors.paleGold);
+      pdf.setDrawColor(...colors.lightGold);
+      pdf.rect(margin, y, pageWidth - margin * 2, 6, "FD");
+      pdf.setTextColor(...colors.deepEmerald);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.text(category.toUpperCase(), pageWidth / 2, y + 4, { align: "center" });
+      y += 6;
+    };
+    if (items.length && y + 14 > bottomLimit) startNewPage();
+    if (items.length) drawCategoryHeader();
+
+    items.forEach((product) => {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      const nameLines = pdf.splitTextToSize(product.name, columnWidths[1] - 5) as string[];
+      const rowHeight = Math.max(8, nameLines.length * 4 + 3);
+      if (y + rowHeight > bottomLimit) {
+        startNewPage();
+        drawCategoryHeader();
+      }
+      const offerPrice = getProductOfferPrice(product, categoryOffers);
+      const saving = product.price - offerPrice;
+      const background = rowIndex % 2 === 0 ? colors.white : colors.stripe;
+      pdf.setDrawColor(...colors.grid);
+      pdf.setLineWidth(0.15);
+      columnWidths.forEach((width, column) => {
+        pdf.setFillColor(...background);
+        pdf.rect(columnX[column], y, width, rowHeight, "FD");
+      });
+
+      const textY = y + Math.min(rowHeight - 2, Math.max(5.5, (rowHeight - nameLines.length * 4) / 2 + 3));
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(8);
+      pdf.setTextColor(...colors.muted);
+      pdf.text(String(product.id), columnX[0] + 2, textY);
+      pdf.setTextColor(...colors.ink);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(nameLines, columnX[1] + 2, textY);
+      if (product.price > 0) {
+        pdf.setFont("helvetica", "normal");
+        pdf.setTextColor(...colors.ink);
+        pdf.text(pdfMoney(product.price), columnX[2] + 2, textY);
+        pdf.setFont("helvetica", saving ? "bold" : "normal");
+        pdf.setTextColor(...(saving ? colors.emerald : colors.muted));
+        const offerText = saving ? `${pdfMoney(saving)} (${getProductOfferPercent(product, categoryOffers)}% off)` : "N/A";
+        pdf.text(offerText, columnX[3] + 2, textY);
+        pdf.setFont("helvetica", "bold");
+        pdf.setTextColor(...colors.emerald);
+        pdf.text(pdfMoney(offerPrice), columnX[4] + 2, textY);
+      } else {
+        pdf.setTextColor(...colors.muted);
+        pdf.text("N/A", columnX[2] + 2, textY);
+        pdf.text("N/A", columnX[3] + 2, textY);
+        pdf.text("Contact us", columnX[4] + 2, textY);
+      }
+      y += rowHeight;
+      rowIndex += 1;
+    });
+  });
+
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(...colors.gold);
+    pdf.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+    pdf.setTextColor(...colors.muted);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.text("Offer rate shows per-item savings; final rate is the price after applicable item/category discount.", margin, pageHeight - 4);
+    pdf.text(`PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
+  }
+  pdf.save("SLV_Crackers_Catalog.pdf");
+};
 function readStorage<T>(key: string, fallback: T): T {
   try {
     const value = localStorage.getItem(key);
@@ -588,6 +724,7 @@ function App() {
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productStorageError, setProductStorageError] = useState("");
+  const [catalogPdfError, setCatalogPdfError] = useState("");
   const [catalogueSaveStatus, setCatalogueSaveStatus] = useState("");
   const [catalogueSaveRequest, setCatalogueSaveRequest] = useState(0);
   const [catalogueApiReady, setCatalogueApiReady] = useState(false);
@@ -1054,6 +1191,15 @@ function App() {
       setCustomerDetailsOpen(true);
     }
   };
+  const handleCatalogDownload = () => {
+    setCatalogPdfError("");
+    try {
+      if (products.length === 0) throw new Error("The catalog has no products to download.");
+      downloadCatalogPdf(products, categoryOffers);
+    } catch (cause) {
+      setCatalogPdfError(cause instanceof Error ? `Catalog PDF could not be created: ${cause.message}` : "Catalog PDF could not be created.");
+    }
+  };
   const downloadPdfAfterAuth = async () => {
     if (!user) {
       setAuthReturnTo("cart");
@@ -1256,10 +1402,16 @@ function App() {
                   For exact offers, please use the quick enquiry option.
                 </p>
               </div>
-              <button className="mobile-cart" onClick={() => openCart()}>
-                Cart ({count})
-              </button>
+              <div className="order-heading-actions">
+                <button className="public-catalog-download" type="button" onClick={handleCatalogDownload}>
+                  Download Catalog PDF
+                </button>
+                <button className="mobile-cart" onClick={() => openCart()}>
+                  Cart ({count})
+                </button>
+              </div>
             </div>
+            {catalogPdfError && <p className="reward-api-error" role="alert">{catalogPdfError}</p>}
             {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
             <section className="shop-offers-banner">
               <div>
