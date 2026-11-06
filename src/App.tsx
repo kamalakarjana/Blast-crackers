@@ -723,7 +723,7 @@ function CategoryIcon({ category }: { category: string }) {
 }
 
 function App() {
-  const [theme, setTheme] = useState<"dark" | "light">(() => readStorage("blast-theme", "dark"));
+  const [theme, setTheme] = useState<"dark" | "light">(() => readStorage("blast-theme", "light"));
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productStorageError, setProductStorageError] = useState("");
