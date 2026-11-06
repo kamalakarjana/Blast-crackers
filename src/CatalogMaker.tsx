@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
+import { safeFilenamePrefix } from "./fileNames";
 import "./CatalogMaker.css";
 
 type ProductPhoto = {
@@ -109,7 +110,7 @@ async function preparePhoto(file: File): Promise<ProductPhoto> {
   }
 }
 
-function downloadCatalog(products: CatalogProduct[]) {
+function downloadCatalog(products: CatalogProduct[], customerName: string) {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -206,16 +207,18 @@ function downloadCatalog(products: CatalogProduct[]) {
     pdf.setFontSize(6);
     pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${generatedPageCount}`, pageWidth - margin, pageHeight - 3, { align: "right" });
   }
-  pdf.save("SLV_Crackers_Category_Price_List.pdf");
+  pdf.save(`${safeFilenamePrefix(customerName)}_SLV_Crackers_Category_Price_List.pdf`);
 }
 
 export default function CatalogMaker({
   products,
   storageError,
+  customerName,
   onProductImageChange,
 }: {
   products: CatalogProduct[];
   storageError: string;
+  customerName: string;
   onProductImageChange: (productId: number, image: string | null) => void;
 }) {
   const [photos, setPhotos] = useState<Record<number, ProductPhoto>>(() =>
@@ -349,7 +352,7 @@ export default function CatalogMaker({
     try {
       setIsDownloading(true);
       setError("");
-      downloadCatalog(products);
+      downloadCatalog(products, customerName);
     } catch (cause) {
       setError(cause instanceof Error ? `PDF could not be created: ${cause.message}` : "PDF could not be created.");
     } finally {

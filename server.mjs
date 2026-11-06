@@ -547,11 +547,37 @@ async function handleAdminOrders(request, response) {
     sendJson(response, 401, { error: 'Sign in as the administrator to view orders.' });
     return;
   }
-  if (request.method !== 'GET') {
-    sendJson(response, 405, { error: 'Use GET to view orders.' });
+  if (request.method === 'GET') {
+    sendJson(response, 200, { orders: await readOrders() });
     return;
   }
-  sendJson(response, 200, { orders: await readOrders() });
+  sendJson(response, 405, { error: 'Use GET to view orders.' });
+}
+
+async function handleAdminOrderDelete(request, response, orderId) {
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Orders require HTTPS or a local SSH tunnel.' });
+    return;
+  }
+  if (!getSession(request, 'admin')) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to delete orders.' });
+    return;
+  }
+  if (request.method !== 'DELETE') {
+    sendJson(response, 405, { error: 'Use DELETE to remove an order.' });
+    return;
+  }
+  const orders = await readOrders();
+  const orderIndex = orders.findIndex((order) => order.id === orderId);
+  if (orderIndex === -1) {
+    sendJson(response, 404, { error: 'Order was not found.' });
+    return;
+  }
+  orders.splice(orderIndex, 1);
+  const temporaryPath = `${ordersPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(orders, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, ordersPath);
+  sendJson(response, 200, { deleted: true });
 }
 
 function normalizeCart(value) {
@@ -1012,6 +1038,11 @@ const requestHandler = async (request, response) => {
     }
     if (url.pathname === '/api/customers/password') {
       await handleCustomerPasswordReset(request, response);
+      return;
+    }
+    const adminOrderMatch = /^\/api\/orders\/([0-9a-f-]{36})$/i.exec(url.pathname);
+    if (adminOrderMatch) {
+      await handleAdminOrderDelete(request, response, adminOrderMatch[1]);
       return;
     }
     if (url.pathname === '/api/orders') {

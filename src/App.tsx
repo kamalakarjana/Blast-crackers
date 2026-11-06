@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { jsPDF } from "jspdf";
 import CatalogMaker from "./CatalogMaker";
 import { crackerCatalog } from "./crackerCatalog";
+import { safeFilenamePrefix } from "./fileNames";
 import productImages from "./productImages.json";
 import { initialRewardTiers, isRewardTierList, type RewardTier } from "./rewardTiers";
 import "./App.css";
@@ -306,6 +307,7 @@ const downloadCartPdf = async (
   rewards: string[] = [],
   categorySavings = 0,
   categoryOffers: CategoryOffer[] = [],
+  customerName = "Customer",
 ) : Promise<void> => {
   const qrCodeData = await loadUpiQrCode(total);
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
@@ -505,9 +507,9 @@ const downloadCartPdf = async (
     pdf.setTextColor(...colors.muted as [number, number, number]);
     pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
   }
-  pdf.save("SLV_Crackers_Order_Summary.pdf");
+  pdf.save(`${safeFilenamePrefix(customerName)}_SLV_Crackers_Order_Summary.pdf`);
 };
-const downloadCatalogPdf = (products: Product[], categoryOffers: CategoryOffer[]) => {
+const downloadCatalogPdf = (products: Product[], categoryOffers: CategoryOffer[], customerName: string) => {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -641,7 +643,7 @@ const downloadCatalogPdf = (products: Product[], categoryOffers: CategoryOffer[]
     pdf.text("Offer rate shows per-item savings; final rate is the price after applicable item/category discount.", margin, pageHeight - 4);
     pdf.text(`PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
   }
-  pdf.save("SLV_Crackers_Catalog.pdf");
+  pdf.save(`${safeFilenamePrefix(customerName)}_SLV_Crackers_Catalog.pdf`);
 };
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -721,6 +723,7 @@ function CategoryIcon({ category }: { category: string }) {
 }
 
 function App() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => readStorage("blast-theme", "dark"));
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productStorageError, setProductStorageError] = useState("");
@@ -759,6 +762,10 @@ function App() {
   const processedCatalogueSaveRequest = useRef(0);
   const pendingCatalogueApplied = useRef(false);
   const productImageCloseButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("blast-theme", JSON.stringify(theme));
+  }, [theme]);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
     cartSaveQueue.current = save.catch(() => undefined);
@@ -1195,7 +1202,7 @@ function App() {
     setCatalogPdfError("");
     try {
       if (products.length === 0) throw new Error("The catalog has no products to download.");
-      downloadCatalogPdf(products, categoryOffers);
+      downloadCatalogPdf(products, categoryOffers, user?.name ?? "Customer");
     } catch (cause) {
       setCatalogPdfError(cause instanceof Error ? `Catalog PDF could not be created: ${cause.message}` : "Catalog PDF could not be created.");
     }
@@ -1217,7 +1224,7 @@ function App() {
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
-    await downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings, categoryOffers);
+    await downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings, categoryOffers, user.name);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -1253,7 +1260,7 @@ function App() {
           : "",
         ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
       ].filter(Boolean);
-      await downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings, categoryOffers)
+      await downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings, categoryOffers, identity.name)
         .catch((cause: unknown) => {
           setCartError(cause instanceof Error ? cause.message : "The order PDF could not be generated.");
         });
@@ -1334,6 +1341,15 @@ function App() {
             <button className={renderedView === "contact" ? "nav-active" : ""} onClick={() => navigate("contact")}>Contact</button>
           </nav>
           <div className="header-tools">
+            <button
+              className="theme-toggle"
+              type="button"
+              onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+              aria-label={`Switch to ${theme === "dark" ? "day" : "night"} mode`}
+              aria-pressed={theme === "dark"}
+            >
+              {theme === "dark" ? "☀ Day" : "☾ Night"}
+            </button>
             {user
               ? <button className="customer-signout" type="button" onClick={() => void signOutCustomer()}>Sign out</button>
               : <button className="customer-signout" type="button" onClick={() => { setAuthReturnTo("shop"); navigate("customer-auth"); }}>Sign in</button>}
@@ -1528,6 +1544,7 @@ function App() {
         <CatalogMaker
           products={products}
           storageError={productStorageError}
+          customerName={user?.name ?? "Customer"}
           onProductImageChange={(productId, image) => {
             setProductStorageError("");
             setProducts((current) =>
@@ -2276,6 +2293,17 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
       setError(cause instanceof Error ? cause.message : "Customer record could not be removed.");
     }
   };
+  const deleteOrder = async (order: CustomerOrder) => {
+    if (!window.confirm(`Permanently delete this ${order.status} order from ${order.customerName} for ${money(order.total)}? This cannot be undone.`)) return;
+    setError("");
+    try {
+      const response = await fetch(`/api/orders/${encodeURIComponent(order.id)}`, { method: "DELETE" });
+      await readApiResult<{ deleted: boolean }>(response);
+      await loadRecords();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The duplicate order could not be deleted.");
+    }
+  };
   const updateCustomerPassword = async (event: FormEvent, customerId: string) => {
     event.preventDefault();
     setError("");
@@ -2375,6 +2403,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                         <div><strong>{money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
                         <p>Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
                         <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                        <button type="button" className="catalog-remove-photo customer-order-delete" onClick={() => void deleteOrder(order)}>Delete duplicate order</button>
                       </article>
                     )) : <p className="offer-admin-note">No checkout attempts have been recorded for this customer.</p>}
                   </div>
@@ -2390,6 +2419,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                 <div><strong>{order.customerName} · {money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
                 <p>{order.customerPhone} · {order.customerEmail} · Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
                 <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                <button type="button" className="catalog-remove-photo customer-order-delete" onClick={() => void deleteOrder(order)}>Delete duplicate order</button>
               </article>
             ))}
           </section>
