@@ -382,6 +382,7 @@
 .account-modal-card { border: 0; border-radius: 0; box-shadow: none; padding: 24px 28px 28px; }
 .account-modal-card h1 { font-size: 28px; }
 .cart-sync-error { width: min(1180px, calc(100% - 32px)); margin: 12px auto; padding: 11px 14px; border: 1px solid #e8c2ae; border-radius: 6px; background: #fff8f4; color: #9a4d2e; font-size: 13px; }
+.cart-notice { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #d6e5c7; border-radius: 8px; background: #f5faed; color: #435b34; font-size: 14px; }
 .info-page { max-width: 800px; min-height: 60vh; margin: 0 auto; padding: 70px 24px; }
 .info-page h1 { color: #1c3426; font: 700 42px Georgia, serif; }
 .info-page > p:not(.admin-kicker) { max-width: 650px; color: #667568; font-size: 16px; line-height: 1.7; }
@@ -1198,12 +1199,22 @@ button { cursor: pointer; }
 .booking-history-card-heading { align-items: center; }
 .booking-history-card-heading strong { color: #176b41; font-size: 20px; }
 .booking-history-card ul { margin-bottom: 12px; }
+.booking-history-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .booking-history-pdf {
   border: 1px solid #bfd8c5;
   border-radius: 7px;
   padding: 9px 13px;
   background: #f3faf4;
   color: #17633b;
+  font-size: 13px;
+  font-weight: 700;
+}
+.booking-history-reorder {
+  border: 1px solid #176b41;
+  border-radius: 7px;
+  padding: 9px 13px;
+  background: #176b41;
+  color: #fff;
   font-size: 13px;
   font-weight: 700;
 }
@@ -1241,6 +1252,16 @@ button { cursor: pointer; }
   border-color: #456b50;
   background: #20382a;
   color: #b6efc5;
+}
+:root[data-theme="dark"] .booking-history-reorder {
+  border-color: #4a9a62;
+  background: #287044;
+  color: #f0fff2;
+}
+:root[data-theme="dark"] .cart-notice {
+  border-color: #4e663d;
+  background: #243522;
+  color: #d3e6ba;
 }
 @media (max-width: 720px) {
   .header-tools .booking-history-link { display: inline-flex !important; }

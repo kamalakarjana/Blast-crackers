@@ -944,6 +944,7 @@ function App() {
   const [authStateReady, setAuthStateReady] = useState(false);
   const [cartReady, setCartReady] = useState(false);
   const [cartError, setCartError] = useState("");
+  const [cartNotice, setCartNotice] = useState("");
   const cartSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const catalogueSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const catalogueSaveVersion = useRef(0);
@@ -1267,7 +1268,8 @@ function App() {
     .filter((tier) => tier.enabled && tier.threshold > targetOfferSpend)
     .sort((left, right) => left.threshold - right.threshold)[0];
   const count = currentCart.reduce((sum, item) => sum + item.quantity, 0);
-  const changeQuantity = (product: Product, delta: number) =>
+  const changeQuantity = (product: Product, delta: number) => {
+    setCartNotice("");
     setCart((items) => {
       const current =
         items.find((item) => item.id === product.id)?.quantity || 0;
@@ -1280,12 +1282,39 @@ function App() {
             )
           : [...items, { ...product, quantity: next }];
     });
-  const submitOrderSelections = (selections: OrderSelection[]) => setCart((items) => selections.reduce((nextItems, selection) => {
-    const existing = nextItems.find((item) => item.id === selection.product.id);
-    return existing
-      ? nextItems.map((item) => item.id === selection.product.id ? { ...item, quantity: item.quantity + selection.quantity } : item)
-      : [...nextItems, { ...selection.product, quantity: selection.quantity }];
-  }, items));
+  };
+  const submitOrderSelections = (selections: OrderSelection[]) => {
+    setCartNotice("");
+    setCart((items) => selections.reduce((nextItems, selection) => {
+      const existing = nextItems.find((item) => item.id === selection.product.id);
+      return existing
+        ? nextItems.map((item) => item.id === selection.product.id ? { ...item, quantity: item.quantity + selection.quantity } : item)
+        : [...nextItems, { ...selection.product, quantity: selection.quantity }];
+    }, items));
+  };
+  const restorePreviousOrder = (order: CustomerOrder): string | null => {
+    if (currentCart.length > 0 && !window.confirm("Replace your current cart with this previous booking? You can edit the quantities and add more items before checkout.")) {
+      return null;
+    }
+    const restoredItems: CartItem[] = [];
+    let unavailableCount = 0;
+    order.items.forEach((item) => {
+      const currentProduct = products.find((product) => product.id === item.id);
+      if (!currentProduct) {
+        unavailableCount += 1;
+        return;
+      }
+      restoredItems.push({ ...currentProduct, quantity: item.quantity });
+    });
+    if (!restoredItems.length) return "None of the products in this booking are currently available to reorder.";
+    setCart(restoredItems);
+    setCartError("");
+    setCartNotice(
+      `Previous booking loaded. Review quantities and current catalogue prices before checkout.${unavailableCount ? ` ${unavailableCount} unavailable ${unavailableCount === 1 ? "item was" : "items were"} left out.` : ""}`,
+    );
+    navigate("cart");
+    return null;
+  };
   const navigate = (nextView: View, nextCategory?: string) => {
     setView(nextView);
     if (nextCategory) setCategory(nextCategory);
@@ -1590,7 +1619,7 @@ function App() {
       )}
       {renderedView === "customer-auth" && <Auth onAuth={authenticate} onBack={() => navigate(authReturnTo)} />}
       {renderedView === "booking-history" && user && (
-        <CustomerBookingHistory customerName={user.name} onBack={() => setShopView()} />
+        <CustomerBookingHistory customerName={user.name} onBack={() => setShopView()} onReorder={restorePreviousOrder} />
       )}
       {renderedView === "shop" && (
         <main className="quick-order">
@@ -1735,6 +1764,7 @@ function App() {
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           count={count}
+          notice={cartNotice}
           onChange={changeQuantity}
           onBack={() => setShopView()}
           user={user !== null}
@@ -2005,6 +2035,7 @@ function Cart({
   rewardTiers,
   rewardTiersError,
   count,
+  notice,
   onChange,
   onBack,
   user,
@@ -2022,6 +2053,7 @@ function Cart({
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   count: number;
+  notice: string;
   onChange: (product: Product, delta: number) => void;
   onBack: () => void;
   user: boolean;
@@ -2060,6 +2092,7 @@ function Cart({
         </button>
       </div>
       {pdfError && <p className="form-error" role="alert">{pdfError}</p>}
+      {notice && <p className="cart-notice" role="status">{notice}</p>}
       <div className="cart-grid">
         <section>
           {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
@@ -2416,10 +2449,19 @@ function RewardTierManager({
   );
 }
 
-function CustomerBookingHistory({ customerName, onBack }: { customerName: string; onBack: () => void }) {
+function CustomerBookingHistory({
+  customerName,
+  onBack,
+  onReorder,
+}: {
+  customerName: string;
+  onBack: () => void;
+  onReorder: (order: CustomerOrder) => string | null;
+}) {
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reorderError, setReorderError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -2471,6 +2513,7 @@ function CustomerBookingHistory({ customerName, onBack }: { customerName: string
         )}
       </header>
       {error && <p className="catalog-maker-error" role="alert">{error}</p>}
+      {reorderError && <p className="catalog-maker-error" role="alert">{reorderError}</p>}
       {loading
         ? <p className="offer-admin-note" role="status">Loading your booking history...</p>
         : orders.length === 0
@@ -2488,13 +2531,22 @@ function CustomerBookingHistory({ customerName, onBack }: { customerName: string
                 </div>
                 <p>Booking #{order.id.slice(0, 8).toUpperCase()} · Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
                 <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
-                <button
-                  type="button"
-                  className="booking-history-pdf"
-                  onClick={() => downloadPdf([order], `${customerName}_Booking_${order.id.slice(0, 8)}`, "CUSTOMER BOOKING")}
-                >
-                  Download this booking PDF
-                </button>
+                <div className="booking-history-actions">
+                  <button
+                    type="button"
+                    className="booking-history-reorder"
+                    onClick={() => setReorderError(onReorder(order) || "")}
+                  >
+                    Edit &amp; reorder
+                  </button>
+                  <button
+                    type="button"
+                    className="booking-history-pdf"
+                    onClick={() => downloadPdf([order], `${customerName}_Booking_${order.id.slice(0, 8)}`, "CUSTOMER BOOKING")}
+                  >
+                    Download this booking PDF
+                  </button>
+                </div>
               </article>
             ))}
           </section>}
