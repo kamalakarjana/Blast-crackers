@@ -246,6 +246,39 @@ type CustomerOrder = {
   attemptedAt: string;
   confirmedAt: string | null;
 };
+function isCustomerOrderList(value: unknown): value is CustomerOrder[] {
+  return Array.isArray(value) && value.every((order) => {
+    if (!order || typeof order !== "object") return false;
+    const candidate = order as Record<string, unknown>;
+    if (
+      typeof candidate.id !== "string"
+      || typeof candidate.customerId !== "string"
+      || typeof candidate.customerName !== "string"
+      || typeof candidate.customerEmail !== "string"
+      || typeof candidate.customerPhone !== "string"
+      || !Number.isSafeInteger(candidate.subtotal)
+      || !Number.isSafeInteger(candidate.discount)
+      || !Number.isSafeInteger(candidate.total)
+      || typeof candidate.status !== "string"
+      || typeof candidate.attemptedAt !== "string"
+      || (candidate.confirmedAt !== null && typeof candidate.confirmedAt !== "string")
+      || !Array.isArray(candidate.items)
+      || candidate.items.length > 200
+    ) return false;
+    return candidate.items.every((item) => {
+      if (!item || typeof item !== "object") return false;
+      const product = item as Record<string, unknown>;
+      return Number.isSafeInteger(product.id)
+        && typeof product.name === "string"
+        && typeof product.category === "string"
+        && Number.isSafeInteger(product.price)
+        && typeof product.pack === "string"
+        && typeof product.image === "string"
+        && Number.isSafeInteger(product.quantity)
+        && Number(product.quantity) > 0;
+    });
+  });
+}
 type AuthenticationInput = { mode: "register"; customer: CustomerRegistration } | { mode: "login"; identifier: string; password: string };
 function isCustomerRecord(value: unknown): value is CustomerRecord {
   if (!value || typeof value !== "object") return false;
@@ -293,11 +326,11 @@ async function saveCustomerCart(cart: CartItem[]) {
   });
   await readApiResult<{ saved: boolean }>(response);
 }
-type View = "customer-auth" | "admin-login" | "shop" | "cart" | "catalogue" | "admin-customers" | "offers" | "order-entry" | "pdf-builder" | "about" | "contact";
-const routeForView = (view: View) => ({ "customer-auth": "#/login", "admin-login": "#/admin/login", shop: "#/", cart: "#/cart", catalogue: "#/admin", "admin-customers": "#/admin/customers", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder", about: "#/about", contact: "#/contact" })[view];
+type View = "customer-auth" | "booking-history" | "admin-login" | "shop" | "cart" | "catalogue" | "admin-customers" | "offers" | "order-entry" | "pdf-builder" | "about" | "contact";
+const routeForView = (view: View) => ({ "customer-auth": "#/login", "booking-history": "#/bookings", "admin-login": "#/admin/login", shop: "#/", cart: "#/cart", catalogue: "#/admin", "admin-customers": "#/admin/customers", offers: "#/offers", "order-entry": "#/order-entry", "pdf-builder": "#/pdf-builder", about: "#/about", contact: "#/contact" })[view];
 const viewForRoute = (): View => {
   if (window.location.hash.startsWith("#/category/")) return "shop";
-  return ({ "#/": "shop", "#/cart": "cart", "#/catalogue": "catalogue", "#/admin": "catalogue", "#/admin/customers": "admin-customers", "#/admin/login": "admin-login", "#/offers": "offers", "#/login": "customer-auth", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder", "#/about": "about", "#/contact": "contact" } as Record<string, View>)[window.location.hash] || "shop";
+  return ({ "#/": "shop", "#/cart": "cart", "#/bookings": "booking-history", "#/catalogue": "catalogue", "#/admin": "catalogue", "#/admin/customers": "admin-customers", "#/admin/login": "admin-login", "#/offers": "offers", "#/login": "customer-auth", "#/order-entry": "order-entry", "#/pdf-builder": "pdf-builder", "#/about": "about", "#/contact": "contact" } as Record<string, View>)[window.location.hash] || "shop";
 };
 const downloadCartPdf = async (
   cart: CartItem[],
@@ -508,6 +541,161 @@ const downloadCartPdf = async (
     pdf.text(`SLV CRACKERS  |  PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
   }
   pdf.save(`${safeFilenamePrefix(customerName)}_SLV_Crackers_Order_Summary.pdf`);
+};
+const downloadBookingHistoryPdf = (orders: CustomerOrder[], filenamePrefix: string, documentTitle = "BOOKING HISTORY") => {
+  if (!orders.length) throw new Error("There are no bookings to download.");
+  if (orders.length > 500) throw new Error("Download a customer history at a time; a single PDF can contain up to 500 bookings.");
+
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const margin = 10;
+  const columnWidths = [14, 131, 22, 43, 53];
+  const columnX = columnWidths.reduce<number[]>((positions, width) => {
+    positions.push((positions.at(-1) ?? margin) + width);
+    return positions;
+  }, [margin]);
+  const colors = {
+    emerald: [18, 79, 58] as [number, number, number],
+    deepEmerald: [13, 58, 43] as [number, number, number],
+    gold: [207, 164, 76] as [number, number, number],
+    paleGold: [250, 245, 231] as [number, number, number],
+    lightGold: [229, 214, 178] as [number, number, number],
+    ink: [43, 54, 47] as [number, number, number],
+    muted: [111, 119, 108] as [number, number, number],
+    grid: [222, 224, 214] as [number, number, number],
+    stripe: [248, 249, 245] as [number, number, number],
+    white: [255, 255, 255] as [number, number, number],
+  };
+  const pdfMoney = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+  const bottomLimit = pageHeight - 14;
+  let y = 0;
+  let rowIndex = 0;
+
+  const drawPageHeader = () => {
+    pdf.setFillColor(...colors.deepEmerald);
+    pdf.rect(0, 0, pageWidth, 22, "F");
+    pdf.setFillColor(...colors.gold);
+    pdf.rect(0, 21, pageWidth, 1, "F");
+    pdf.setTextColor(...colors.white);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(16);
+    pdf.text("SLV CRACKERS", pageWidth / 2, 10, { align: "center" });
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.text(documentTitle, pageWidth / 2, 17, { align: "center" });
+    y = 28;
+  };
+  const drawTableHeader = () => {
+    pdf.setFillColor(...colors.emerald);
+    pdf.rect(margin, y, pageWidth - margin * 2, 7, "F");
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(7);
+    pdf.setTextColor(...colors.white);
+    ["SN", "ITEM NAME", "QTY", "UNIT RATE", "AMOUNT"].forEach((label, index) => {
+      pdf.text(label, columnX[index] + 2, y + 4.8);
+    });
+    y += 7;
+  };
+  const startNewPage = () => {
+    pdf.addPage();
+    drawPageHeader();
+  };
+
+  drawPageHeader();
+  [...orders].sort((left, right) => Date.parse(right.attemptedAt) - Date.parse(left.attemptedAt)).forEach((order) => {
+    if (y + 22 > bottomLimit) startNewPage();
+    pdf.setFillColor(...colors.paleGold);
+    pdf.setDrawColor(...colors.lightGold);
+    pdf.rect(margin, y, pageWidth - margin * 2, 13, "FD");
+    pdf.setTextColor(...colors.deepEmerald);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    pdf.text(`${order.customerName}  |  BOOKING ${order.id.slice(0, 8).toUpperCase()}`, margin + 3, y + 5);
+    pdf.setFont("helvetica", "normal");
+    pdf.setTextColor(...colors.ink);
+    const attemptedDate = new Date(order.attemptedAt);
+    pdf.text(
+      `${Number.isNaN(attemptedDate.getTime()) ? order.attemptedAt : attemptedDate.toLocaleString("en-IN")}  |  ${order.status.toUpperCase()}`,
+      margin + 3,
+      y + 10,
+    );
+    pdf.setTextColor(...colors.muted);
+    pdf.text(`${order.customerPhone}  |  ${order.customerEmail}`, pageWidth - margin - 3, y + 5, { align: "right" });
+    y += 13;
+    drawTableHeader();
+
+    order.items.forEach((item, index) => {
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(7.5);
+      const nameLines = pdf.splitTextToSize(item.name, columnWidths[1] - 5) as string[];
+      const rowHeight = Math.max(7, nameLines.length * 3.8 + 2.5);
+      if (y + rowHeight > bottomLimit) {
+        startNewPage();
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8);
+        pdf.setTextColor(...colors.deepEmerald);
+        pdf.text(`BOOKING ${order.id.slice(0, 8).toUpperCase()} (CONTINUED)`, margin, y);
+        y += 4;
+        drawTableHeader();
+      }
+      const background = rowIndex % 2 === 0 ? colors.white : colors.stripe;
+      pdf.setDrawColor(...colors.grid);
+      pdf.setLineWidth(0.12);
+      columnWidths.forEach((width, column) => {
+        pdf.setFillColor(...background);
+        pdf.rect(columnX[column], y, width, rowHeight, "FD");
+      });
+      const textY = y + Math.min(rowHeight - 1.5, Math.max(4.5, (rowHeight - nameLines.length * 3.8) / 2 + 3));
+      pdf.setTextColor(...colors.muted);
+      pdf.text(String(index + 1), columnX[0] + 2, textY);
+      pdf.setFont("helvetica", "bold");
+      pdf.setTextColor(...colors.ink);
+      pdf.text(nameLines, columnX[1] + 2, textY);
+      pdf.setFont("helvetica", "normal");
+      pdf.text(String(item.quantity), columnX[2] + columnWidths[2] - 2, textY, { align: "right" });
+      pdf.text(pdfMoney(item.price), columnX[3] + columnWidths[3] - 2, textY, { align: "right" });
+      pdf.setFont("helvetica", "bold");
+      pdf.setTextColor(...colors.emerald);
+      pdf.text(pdfMoney(item.price * item.quantity), columnX[4] + columnWidths[4] - 2, textY, { align: "right" });
+      y += rowHeight;
+      rowIndex += 1;
+    });
+
+    if (y + 22 > bottomLimit) {
+      startNewPage();
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(8);
+      pdf.setTextColor(...colors.deepEmerald);
+      pdf.text(`BOOKING ${order.id.slice(0, 8).toUpperCase()} TOTALS`, margin, y);
+      y += 5;
+    }
+    y += 3;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(8);
+    pdf.setTextColor(...colors.muted);
+    pdf.text(`Subtotal: ${pdfMoney(order.subtotal)}`, pageWidth - margin - 86, y + 4);
+    pdf.text(`Discount: -${pdfMoney(order.discount)}`, pageWidth - margin - 86, y + 9);
+    pdf.setFillColor(...colors.paleGold);
+    pdf.setDrawColor(...colors.lightGold);
+    pdf.roundedRect(pageWidth - margin - 89, y + 12, 89, 8, 1, 1, "FD");
+    pdf.setFont("helvetica", "bold");
+    pdf.setTextColor(...colors.deepEmerald);
+    pdf.text(`BOOKING TOTAL: ${pdfMoney(order.total)}`, pageWidth - margin - 86, y + 17.5);
+    y += 23;
+  });
+
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setDrawColor(...colors.gold);
+    pdf.line(margin, pageHeight - 8, pageWidth - margin, pageHeight - 8);
+    pdf.setTextColor(...colors.muted);
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(7);
+    pdf.text(`PAGE ${page} OF ${pageCount}`, pageWidth - margin, pageHeight - 4, { align: "right" });
+  }
+  pdf.save(`${safeFilenamePrefix(filenamePrefix)}_SLV_Booking_History.pdf`);
 };
 const downloadCatalogPdf = (products: Product[], categoryOffers: CategoryOffer[], customerName: string) => {
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
@@ -1155,13 +1343,19 @@ function App() {
       window.history.replaceState({}, "", routeForView("admin-login"));
     } else if (view === "admin-login" && adminAuthenticated) {
       window.history.replaceState({}, "", routeForView("catalogue"));
+    } else if (view === "booking-history" && !user) {
+      window.history.replaceState({}, "", routeForView("customer-auth"));
     }
-  }, [view, adminAuthenticated, authStateReady]);
+  }, [view, adminAuthenticated, authStateReady, user]);
   const isAdminView = view === "catalogue" || view === "admin-customers" || view === "order-entry" || view === "pdf-builder";
   const renderedView: View = !authStateReady && isAdminView
     ? "admin-login"
+    : !authStateReady && view === "booking-history"
+      ? "shop"
     : isAdminView && !adminAuthenticated
       ? "admin-login"
+      : view === "booking-history" && !user
+        ? "customer-auth"
       : view === "admin-login" && adminAuthenticated
         ? "catalogue"
         : view;
@@ -1242,7 +1436,7 @@ function App() {
     setCartError("");
     setCartReady(true);
     setCustomerDetailsOpen(false);
-    navigate(authReturnTo);
+    navigate(view === "booking-history" ? "booking-history" : authReturnTo);
     if (pendingPdfDownload) {
       const cartSubtotal = restoredCart.reduce((sum, item) => sum + item.price * item.quantity, 0);
       const savedCategorySavings = restoredCart.reduce((sum, item) =>
@@ -1341,6 +1535,16 @@ function App() {
             <button className={renderedView === "contact" ? "nav-active" : ""} onClick={() => navigate("contact")}>Contact</button>
           </nav>
           <div className="header-tools">
+            {user && (
+              <button
+                className="booking-history-link"
+                type="button"
+                onClick={() => navigate("booking-history")}
+                aria-current={renderedView === "booking-history" ? "page" : undefined}
+              >
+                My bookings
+              </button>
+            )}
             <button
               className="theme-toggle"
               type="button"
@@ -1385,6 +1589,9 @@ function App() {
         />
       )}
       {renderedView === "customer-auth" && <Auth onAuth={authenticate} onBack={() => navigate(authReturnTo)} />}
+      {renderedView === "booking-history" && user && (
+        <CustomerBookingHistory customerName={user.name} onBack={() => setShopView()} />
+      )}
       {renderedView === "shop" && (
         <main className="quick-order">
           <aside className="category-panel">
@@ -2209,6 +2416,92 @@ function RewardTierManager({
   );
 }
 
+function CustomerBookingHistory({ customerName, onBack }: { customerName: string; onBack: () => void }) {
+  const [orders, setOrders] = useState<CustomerOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/customer-orders")
+      .then(async (response) => {
+        const result = await readApiResult<{ orders?: unknown }>(response);
+        if (!isCustomerOrderList(result.orders)) throw new Error("The server returned invalid booking history.");
+        return result.orders;
+      })
+      .then((customerOrders) => {
+        if (cancelled) return;
+        setOrders([...customerOrders].sort((left, right) => Date.parse(right.attemptedAt) - Date.parse(left.attemptedAt)));
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Your booking history could not be loaded.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const downloadPdf = (selectedOrders: CustomerOrder[], prefix: string, title: string) => {
+    setError("");
+    try {
+      downloadBookingHistoryPdf(selectedOrders, prefix, title);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The booking PDF could not be created.");
+    }
+  };
+
+  return (
+    <main className="booking-history-page">
+      <button type="button" className="back-link" onClick={onBack}>← Continue shopping</button>
+      <header className="booking-history-heading">
+        <div>
+          <p className="admin-kicker">SLV / CUSTOMER ACCOUNT</p>
+          <h1>My booking history</h1>
+          <p>Review your saved checkout bookings and download a PDF copy.</p>
+        </div>
+        {!loading && orders.length > 0 && (
+          <button
+            type="button"
+            className="save-product"
+            onClick={() => downloadPdf(orders, customerName, "CUSTOMER BOOKING HISTORY")}
+          >
+            Download all bookings PDF
+          </button>
+        )}
+      </header>
+      {error && <p className="catalog-maker-error" role="alert">{error}</p>}
+      {loading
+        ? <p className="offer-admin-note" role="status">Loading your booking history...</p>
+        : orders.length === 0
+          ? <section className="booking-history-empty">
+            <h2>No bookings yet</h2>
+            <p>Your checkout bookings will appear here after you continue to checkout.</p>
+            <button type="button" className="save-product" onClick={onBack}>Browse crackers</button>
+          </section>
+          : <section className="booking-history-list" aria-label="Your bookings">
+            {orders.map((order) => (
+              <article className="customer-order-card booking-history-card" key={order.id}>
+                <div className="booking-history-card-heading">
+                  <strong>{money(order.total)}</strong>
+                  <span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span>
+                </div>
+                <p>Booking #{order.id.slice(0, 8).toUpperCase()} · Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
+                <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                <button
+                  type="button"
+                  className="booking-history-pdf"
+                  onClick={() => downloadPdf([order], `${customerName}_Booking_${order.id.slice(0, 8)}`, "CUSTOMER BOOKING")}
+                >
+                  Download this booking PDF
+                </button>
+              </article>
+            ))}
+          </section>}
+    </main>
+  );
+}
+
 function AdminCustomersPage({ onBack }: { onBack: () => void }) {
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
@@ -2231,9 +2524,9 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
       if (!Array.isArray(customerResult.customers) || !customerResult.customers.every(isCustomerRecord)) {
         throw new Error("The server returned invalid customer registration data.");
       }
-      if (!Array.isArray(orderResult.orders)) throw new Error("The server returned invalid order history.");
+      if (!isCustomerOrderList(orderResult.orders)) throw new Error("The server returned invalid order history.");
       setCustomers(customerResult.customers);
-      setOrders(orderResult.orders as CustomerOrder[]);
+      setOrders(orderResult.orders);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Customer records and orders could not be loaded.");
     } finally {
@@ -2342,6 +2635,14 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
       item.name, String(item.quantity), String(item.price), String(item.price * item.quantity),
     ])),
   ]);
+  const exportBookingPdfs = (selectedOrders: CustomerOrder[], filenamePrefix: string, title: string) => {
+    setError("");
+    try {
+      downloadBookingHistoryPdf(selectedOrders, filenamePrefix, title);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The booking PDF could not be created.");
+    }
+  };
 
   return (
     <main className="admin-page">
@@ -2379,7 +2680,9 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
         <div className="customer-export-actions">
           <button type="button" className="catalog-folder-button" onClick={exportCustomers} disabled={!customers.length}>Download customers CSV</button>
           <button type="button" className="catalog-folder-button" onClick={exportOrders} disabled={!orders.length}>Download order details CSV</button>
+          <button type="button" className="catalog-folder-button" onClick={() => exportBookingPdfs(orders, "SLV_All_Customers", "ALL CUSTOMER BOOKING HISTORY")} disabled={!orders.length || orders.length > 500}>Download all bookings PDF</button>
         </div>
+        {orders.length > 500 && <p className="offer-admin-note">There are more than 500 bookings. Download PDFs from each customer’s history instead.</p>}
         {loading ? <p className="offer-admin-note" role="status">Loading customer and order records...</p> : customers.length === 0
           ? <p>No customer accounts have registered yet.</p>
           : <div className="customer-list">
@@ -2394,6 +2697,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                   <div className="customer-record-actions">
                     <a href={`tel:${customer.phone}`}>Call customer</a>
                     <a href={`mailto:${customer.email}`}>Email customer</a>
+                    {customerOrders.length > 0 && <button type="button" onClick={() => exportBookingPdfs(customerOrders, customer.name, "CUSTOMER BOOKING HISTORY")}>Download booking history PDF</button>}
                     <button type="button" onClick={() => editCustomer(customer)}>Edit</button>
                     <button type="button" className="catalog-remove-photo" onClick={() => void deleteCustomer(customer)}>Remove</button>
                   </div>
@@ -2403,6 +2707,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                         <div><strong>{money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
                         <p>Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
                         <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                        <button type="button" className="booking-history-pdf" onClick={() => exportBookingPdfs([order], `${order.customerName}_Booking_${order.id.slice(0, 8)}`, "CUSTOMER BOOKING")}>Download booking PDF</button>
                         <button type="button" className="catalog-remove-photo customer-order-delete" onClick={() => void deleteOrder(order)}>Delete duplicate order</button>
                       </article>
                     )) : <p className="offer-admin-note">No checkout attempts have been recorded for this customer.</p>}
@@ -2419,6 +2724,7 @@ function AdminCustomersPage({ onBack }: { onBack: () => void }) {
                 <div><strong>{order.customerName} · {money(order.total)}</strong><span>{new Date(order.attemptedAt).toLocaleString("en-IN")} · {order.status}</span></div>
                 <p>{order.customerPhone} · {order.customerEmail} · Subtotal {money(order.subtotal)}{order.discount ? ` · Discount -${money(order.discount)}` : ""}</p>
                 <ul>{order.items.map((item) => <li key={`${order.id}-${item.id}`}>{item.name} — {item.quantity} × {money(item.price)} = {money(item.price * item.quantity)}</li>)}</ul>
+                <button type="button" className="booking-history-pdf" onClick={() => exportBookingPdfs([order], `${order.customerName}_Booking_${order.id.slice(0, 8)}`, "CUSTOMER BOOKING")}>Download booking PDF</button>
                 <button type="button" className="catalog-remove-photo customer-order-delete" onClick={() => void deleteOrder(order)}>Delete duplicate order</button>
               </article>
             ))}
