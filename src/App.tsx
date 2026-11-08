@@ -1586,6 +1586,10 @@ function App() {
   };
   return (
     <div className="site-shell">
+      <aside className="order-closure-notice" role="status" aria-label="Order and delivery update">
+        <strong>Orders are closed for new bookings right now.</strong>
+        <span>Orders already accepted will be delivered by 6:00 PM today.</span>
+      </aside>
       {renderedView !== "admin-login" && (
         <header className="site-header">
           <button
