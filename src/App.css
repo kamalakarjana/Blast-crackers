@@ -298,6 +298,13 @@
 .upi-options span { font-size: 13px; font-weight: 700; letter-spacing: .3px; }
 .upi-options small { margin-left: auto; color: var(--muted); font-size: 11px; }
 .upi-copy-status { display: block; margin-top: 6px; color: var(--green); text-align: left; }
+.payment-settings-editor { margin-top: 32px; padding: 25px; border: 1px solid #e3e9e2; border-radius: 8px; background: white; }
+.payment-settings-editor .offer-admin-note { max-width: 760px; }
+.payment-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0; }
+.payment-settings-grid > label { display: block; color: var(--navy); font-size: 13px; font-weight: 700; }
+.payment-settings-grid > label > input[type="text"] { display: block; width: 100%; margin-top: 7px; padding: 11px 12px; border: 1px solid #d6dfe9; border-radius: 5px; }
+.payment-upi-choice { display: flex; align-items: center; gap: 8px; margin-top: 10px; color: var(--green); font-size: 12px; }
+.payment-settings-editor > .save-product { margin-top: 4px; }
 .payment-confirm { width: 100%; margin-top: 18px; border: 0; border-radius: 5px; padding: 14px; background: var(--green); color: white; font-weight: 800; }
 .payment-note { display: block; margin-top: 12px; color: #9aa4b1; font-size: 11px; }
 @keyframes welcome-in { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -1288,6 +1295,17 @@ button { cursor: pointer; }
   border-color: #5b9e6d;
   background: #20382a;
 }
+:root[data-theme="dark"] .payment-settings-editor {
+  border-color: rgb(112 143 119 / 23%);
+  background: rgb(23 35 28 / 94%);
+  color: var(--ink);
+}
+:root[data-theme="dark"] .payment-settings-grid > label { color: var(--ink); }
+:root[data-theme="dark"] .payment-settings-grid > label > input[type="text"] {
+  border-color: #3a5040;
+  background: #101b14;
+  color: var(--ink);
+}
 :root[data-theme="dark"] .stock-badge {
   background: #482b25;
   color: #ffb8a9;
@@ -1302,4 +1320,6 @@ button { cursor: pointer; }
   .booking-history-heading { align-items: stretch; flex-direction: column; padding: 19px; }
   .booking-history-heading .save-product { width: 100%; }
   .booking-history-card-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .payment-settings-editor { padding: 18px; }
+  .payment-settings-grid { grid-template-columns: minmax(0, 1fr); }
 }

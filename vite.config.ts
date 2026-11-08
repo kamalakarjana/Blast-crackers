@@ -13,6 +13,27 @@ const scrypt = promisify(scryptCallback);
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
 const customerSessionCookie = 'slv_customer_session';
 const adminSessionCookie = 'slv_admin_session';
+const defaultPaymentSettings = {
+  upiIds: ['9000488963@ybl', '7780752396@ybl'],
+  activeUpiId: '9000488963@ybl',
+};
+
+function isPaymentSettings(value: unknown): value is {
+  upiIds: [string, string];
+  activeUpiId: string;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.upiIds) || candidate.upiIds.length !== 2) return false;
+  const [first, second] = candidate.upiIds;
+  const validUpiId = (upiId: unknown) =>
+    typeof upiId === 'string' && upiId.length <= 100 && /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(upiId);
+  return validUpiId(first)
+    && validUpiId(second)
+    && first.toLowerCase() !== second.toLowerCase()
+    && validUpiId(candidate.activeUpiId)
+    && candidate.upiIds.includes(candidate.activeUpiId);
+}
 
 async function parseRequestJson(request: IncomingMessage, maximumBytes = 100_000): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -128,7 +149,7 @@ function productImageWriter(): Plugin {
         const authPath = url.pathname === '/api/customers'
           || url.pathname === '/api/customers/password'
           || /^\/api\/(?:auth\/(?:register|login|session|logout)|admin\/(?:login|session|logout)|customer-cart|customer-welcome-offer\/redeem|customer-orders(?:\/[0-9a-f-]{36}\/confirm)?|orders)$/.test(url.pathname);
-        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/catalogue' && url.pathname !== '/api/customers' && !authPath) {
+        if (url.pathname !== '/api/product-images' && url.pathname !== '/api/reward-tiers' && url.pathname !== '/api/catalogue' && url.pathname !== '/api/payment-settings' && url.pathname !== '/api/customers' && !authPath) {
           next();
           return;
         }
@@ -150,6 +171,7 @@ function productImageWriter(): Plugin {
         const cartsPath = resolve(dataDirectory, 'customerCarts.json');
         const ordersPath = resolve(dataDirectory, 'customerOrders.json');
         const cataloguePath = resolve(dataDirectory, 'catalogue.json');
+        const paymentSettingsPath = resolve(dataDirectory, 'paymentSettings.json');
 
         const sendUnauthorized = (message: string) => sendJson(401, { error: message });
         const currentSession = (kind: 'customer' | 'admin') => {
@@ -181,6 +203,51 @@ function productImageWriter(): Plugin {
           await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
           await rename(temporaryPath, path);
         };
+
+        if (url.pathname === '/api/payment-settings') {
+          if (!isLoopbackRequest(request)) {
+            sendJson(403, { error: 'Payment settings are restricted to the local development machine.' });
+            return;
+          }
+          void (async () => {
+            try {
+              if (request.method === 'GET') {
+                let settings: unknown = defaultPaymentSettings;
+                try {
+                  settings = JSON.parse(await readFile(paymentSettingsPath, 'utf8')) as unknown;
+                } catch (error) {
+                  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+                }
+                if (!isPaymentSettings(settings)) throw new Error('Saved payment settings are invalid.');
+                sendJson(200, settings);
+                return;
+              }
+              if (request.method !== 'PUT') {
+                sendJson(405, { error: 'Use GET to load or PUT to update payment settings.' });
+                return;
+              }
+              if (!currentSession('admin')) {
+                sendUnauthorized('Sign in as the administrator to update payment settings.');
+                return;
+              }
+              const settings = await parseRequestJson(request);
+              if (!isPaymentSettings(settings)) {
+                sendJson(400, { error: 'Enter two different valid UPI IDs and select one as active.' });
+                return;
+              }
+              await saveJson(paymentSettingsPath, settings);
+              sendJson(200, settings);
+            } catch (error) {
+              server.config.logger.error('Payment settings request failed.', {
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+              sendJson(error instanceof Error && error.message === 'Request body is too large.' ? 413 : 400, {
+                error: error instanceof Error ? error.message : 'Payment settings could not be saved.',
+              });
+            }
+          })();
+          return;
+        }
 
         if (url.pathname === '/api/catalogue') {
           if (!isLoopbackRequest(request)) {

@@ -37,6 +37,24 @@ type CategoryOffer = {
   enabled: boolean;
   countsTowardTargetOffers?: boolean;
 };
+type PaymentSettings = { upiIds: [string, string]; activeUpiId: string };
+const defaultPaymentSettings: PaymentSettings = {
+  upiIds: ["9000488963@ybl", "7780752396@ybl"],
+  activeUpiId: "9000488963@ybl",
+};
+const isPaymentSettings = (value: unknown): value is PaymentSettings => {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (!Array.isArray(candidate.upiIds) || candidate.upiIds.length !== 2) return false;
+  const [first, second] = candidate.upiIds;
+  const validUpiId = (upiId: unknown) =>
+    typeof upiId === "string" && upiId.length <= 100 && /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(upiId);
+  return validUpiId(first)
+    && validUpiId(second)
+    && first.toLowerCase() !== second.toLowerCase()
+    && validUpiId(candidate.activeUpiId)
+    && candidate.upiIds.includes(candidate.activeUpiId);
+};
 const parsePrice = (value: string | null) => Number(String(value ?? "0").replace(/[^0-9]/g, "")) || 0;
 const seed: Product[] = crackerCatalog.map((item, index) => ({
   id: index + 1,
@@ -142,14 +160,11 @@ const defaultOffers: Offer[] = [
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
-const upiIds = ["9000488963@ybl", "7780752396@ybl"] as const;
-type UpiId = (typeof upiIds)[number];
-const defaultUpiId = upiIds[0];
-const getUpiPaymentUri = (total: number, selectedUpiId: UpiId = defaultUpiId) =>
+const getUpiPaymentUri = (total: number, selectedUpiId = defaultPaymentSettings.activeUpiId) =>
   `upi://pay?pa=${encodeURIComponent(selectedUpiId)}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
-const getUpiQrCodeUrl = (total: number, selectedUpiId: UpiId = defaultUpiId) =>
+const getUpiQrCodeUrl = (total: number, selectedUpiId = defaultPaymentSettings.activeUpiId) =>
   `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(getUpiPaymentUri(total, selectedUpiId))}`;
-const loadUpiQrCode = async (total: number, selectedUpiId: UpiId = defaultUpiId) => {
+const loadUpiQrCode = async (total: number, selectedUpiId = defaultPaymentSettings.activeUpiId) => {
   const response = await fetch(getUpiQrCodeUrl(total, selectedUpiId));
   if (!response.ok) throw new Error("The UPI QR code could not be loaded for the order PDF.");
   const image = await response.blob();
@@ -345,8 +360,9 @@ const downloadCartPdf = async (
   categorySavings = 0,
   categoryOffers: CategoryOffer[] = [],
   customerName = "Customer",
+  paymentUpiId = defaultPaymentSettings.activeUpiId,
 ) : Promise<void> => {
-  const qrCodeData = await loadUpiQrCode(total);
+  const qrCodeData = await loadUpiQrCode(total, paymentUpiId);
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -529,12 +545,11 @@ const downloadCartPdf = async (
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(8);
   pdf.setTextColor(...colors.ink as [number, number, number]);
-  pdf.text(`UPI ID: ${defaultUpiId}`, margin + 44, y + 18);
-  pdf.text(`Alternative UPI ID: ${upiIds[1]}`, margin + 44, y + 25);
-  pdf.text(`Amount: ${pdfMoney(total)}`, margin + 44, y + 32);
+  pdf.text(`UPI ID: ${paymentUpiId}`, margin + 44, y + 19);
+  pdf.text(`Amount: ${pdfMoney(total)}`, margin + 44, y + 27);
   pdf.setFontSize(6.5);
   pdf.setTextColor(...colors.muted as [number, number, number]);
-  pdf.text("The QR uses the primary ID. Select the alternative ID in checkout if needed.", margin + 44, y + 40);
+  pdf.text("Scan this QR code using any UPI app. Please verify the payee and amount before paying.", margin + 44, y + 35);
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
     pdf.setPage(page);
@@ -918,6 +933,9 @@ function CategoryIcon({ category }: { category: string }) {
 function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => readStorage("blast-theme", "light"));
   const [products, setProducts] = useState<Product[]>(getInitialProducts);
+  const [paymentSettings, setPaymentSettings] = useState<PaymentSettings>(defaultPaymentSettings);
+  const [paymentSettingsReady, setPaymentSettingsReady] = useState(false);
+  const [paymentSettingsError, setPaymentSettingsError] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [productStorageError, setProductStorageError] = useState("");
   const [catalogPdfError, setCatalogPdfError] = useState("");
@@ -960,6 +978,27 @@ function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("blast-theme", JSON.stringify(theme));
   }, [theme]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/payment-settings")
+      .then(async (response) => {
+        const result = await readApiResult<unknown>(response);
+        if (!isPaymentSettings(result)) throw new Error("The server returned invalid payment settings.");
+        return result;
+      })
+      .then((result) => {
+        if (cancelled) return;
+        setPaymentSettings(result);
+        setPaymentSettingsError("");
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setPaymentSettingsError(cause instanceof Error ? cause.message : "Payment details could not be loaded.");
+      })
+      .finally(() => {
+        if (!cancelled) setPaymentSettingsReady(true);
+      });
+    return () => { cancelled = true; };
+  }, []);
   const queueCartSave = (nextCart: CartItem[]) => {
     const save = cartSaveQueue.current.then(() => saveCustomerCart(nextCart));
     cartSaveQueue.current = save.catch(() => undefined);
@@ -1406,6 +1445,10 @@ function App() {
     }
     setPaymentError("");
     try {
+      const settingsResult = await readApiResult<unknown>(await fetch("/api/payment-settings"));
+      if (!isPaymentSettings(settingsResult)) throw new Error("The server returned invalid payment settings.");
+      setPaymentSettings(settingsResult);
+      setPaymentSettingsError("");
       const response = await fetch("/api/customer-orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1458,7 +1501,7 @@ function App() {
         : "",
       ...new Set(rewardTiersEarned.map((tier) => tier.bonusPack).filter(Boolean)),
     ].filter(Boolean);
-    await downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings, categoryOffers, user.name);
+    await downloadCartPdf(currentCart, subtotal, total, activeOffer, rewards, categorySavings, categoryOffers, user.name, paymentSettings.activeUpiId);
   };
   const authenticate = async (input: AuthenticationInput) => {
     const identity = await authenticateCustomer(input);
@@ -1494,7 +1537,7 @@ function App() {
           : "",
         ...new Set(earned.map((tier) => tier.bonusPack).filter(Boolean)),
       ].filter(Boolean);
-      await downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings, categoryOffers, identity.name)
+      await downloadCartPdf(restoredCart, cartSubtotal, Math.max(0, cartSubtotal - savedCategorySavings - (customerOffer?.discount || 0)), customerOffer, rewards, savedCategorySavings, categoryOffers, identity.name, paymentSettings.activeUpiId)
         .catch((cause: unknown) => {
           setCartError(cause instanceof Error ? cause.message : "The order PDF could not be generated.");
         });
@@ -1821,6 +1864,21 @@ function App() {
           catalogueSaveStatus={catalogueSaveStatus}
           onSaveCatalogue={() => setCatalogueSaveRequest((request) => request + 1)}
           catalogueApiReady={catalogueApiReady}
+          paymentSettings={paymentSettings}
+          paymentSettingsError={paymentSettingsError}
+          paymentSettingsReady={paymentSettingsReady}
+          onSavePaymentSettings={async (settings) => {
+            const response = await fetch("/api/payment-settings", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(settings),
+            });
+            const result = await readApiResult<unknown>(response);
+            if (!isPaymentSettings(result)) throw new Error("The server returned invalid saved payment settings.");
+            setPaymentSettings(result);
+            setPaymentSettingsError("");
+            return result;
+          }}
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           onSaveRewardTiers={(tiers) => {
@@ -1872,7 +1930,7 @@ function App() {
           <button onClick={openAdmin}>Shop management</button>
         )}
       </footer>
-      {paymentOpen && <PaymentModal total={total} error={paymentError} onClose={() => setPaymentOpen(false)} onPaid={() => {
+      {paymentOpen && <PaymentModal total={total} upiId={paymentSettings.activeUpiId} error={paymentError} onClose={() => setPaymentOpen(false)} onPaid={() => {
         void completePurchase().catch((cause: unknown) => {
           setPaymentError(cause instanceof Error ? cause.message : "Your order could not be recorded.");
         });
@@ -2276,14 +2334,13 @@ function Auth({
   );
 }
 
-function PaymentModal({ total, error, onClose, onPaid }: { total: number; error: string; onClose: () => void; onPaid: () => void }) {
-  const [selectedUpiId, setSelectedUpiId] = useState<UpiId>(defaultUpiId);
+function PaymentModal({ total, upiId, error, onClose, onPaid }: { total: number; upiId: string; error: string; onClose: () => void; onPaid: () => void }) {
   const [copyStatus, setCopyStatus] = useState("");
-  const qrCodeUrl = getUpiQrCodeUrl(total, selectedUpiId);
+  const qrCodeUrl = getUpiQrCodeUrl(total, upiId);
   const copyUpi = async () => {
     try {
       if (!navigator.clipboard) throw new Error("Clipboard access is unavailable in this browser.");
-      await navigator.clipboard.writeText(selectedUpiId);
+      await navigator.clipboard.writeText(upiId);
       setCopyStatus("UPI ID copied.");
     } catch (cause) {
       setCopyStatus(cause instanceof Error ? cause.message : "The UPI ID could not be copied.");
@@ -2295,25 +2352,9 @@ function PaymentModal({ total, error, onClose, onPaid }: { total: number; error:
         <button type="button" className="close" onClick={onClose} aria-label="Close payment">×</button>
         <p className="welcome-kicker">SECURE UPI PAYMENT</p>
         <h2 id="payment-title">Pay {money(total)}</h2>
-        <p className="payment-intro">Choose a UPI ID, then scan its QR code or copy the ID to complete your order.</p>
-        <fieldset className="upi-options">
-          <legend>Choose payment UPI ID</legend>
-          {upiIds.map((upiOption, index) => (
-            <label key={upiOption} className={selectedUpiId === upiOption ? "upi-option-selected" : ""}>
-              <input
-                type="radio"
-                name="payment-upi-id"
-                value={upiOption}
-                checked={selectedUpiId === upiOption}
-                onChange={() => { setSelectedUpiId(upiOption); setCopyStatus(""); }}
-              />
-              <span>{upiOption}</span>
-              <small>{index === 0 ? "Primary" : "Alternative"}</small>
-            </label>
-          ))}
-        </fieldset>
+        <p className="payment-intro">Scan the QR code or copy the current UPI ID to complete your order.</p>
         <div className="qr-frame"><img src={qrCodeUrl} alt={`UPI payment QR code for ${money(total)}`} /></div>
-        <div className="upi-row"><div><small>Selected UPI ID</small><strong>{selectedUpiId}</strong></div><button type="button" onClick={() => void copyUpi()}>Copy</button></div>
+        <div className="upi-row"><div><small>UPI ID</small><strong>{upiId}</strong></div><button type="button" onClick={() => void copyUpi()}>Copy</button></div>
         {copyStatus && <small className="upi-copy-status" role="status">{copyStatus}</small>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="payment-confirm" type="button" onClick={onPaid}>I have completed the payment</button>
@@ -2837,6 +2878,88 @@ function InfoPage({ kind, onContact }: { kind: "about" | "contact"; onContact: (
   return <main className="info-page"><p className="admin-kicker">SLV / ABOUT</p><h1>Bright celebrations, great prices.</h1><p>SLV Crackers helps you browse products by category, prepare a clear order summary, and keep your selections together in your cart.</p><button className="save-product" type="button" onClick={onContact}>Contact SLV Crackers →</button></main>;
 }
 
+function PaymentSettingsEditor({
+  settings,
+  ready,
+  loadError,
+  onSave,
+}: {
+  settings: PaymentSettings;
+  ready: boolean;
+  loadError: string;
+  onSave: (settings: PaymentSettings) => Promise<PaymentSettings>;
+}) {
+  const [draft, setDraft] = useState<PaymentSettings>(settings);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const save = async () => {
+    const normalized = {
+      upiIds: draft.upiIds.map((upiId) => upiId.trim()) as [string, string],
+      activeUpiId: draft.activeUpiId.trim(),
+    };
+    if (!isPaymentSettings(normalized)) {
+      setError("Enter two different valid UPI IDs and select which one customers should use.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const saved = await onSave(normalized);
+      setDraft(saved);
+      setStatus("The active UPI ID and QR code are now updated for all customers.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Payment settings could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <section className="payment-settings-editor">
+      <div className="admin-products-head">
+        <h2>Customer payment UPI</h2>
+        <span>Only the selected ID and its QR code are shown at checkout</span>
+      </div>
+      {loadError && <p className="reward-api-error" role="alert">{loadError}</p>}
+      <p className="offer-admin-note">Edit the available UPI IDs, then choose which one is currently accepting payments. Changes are shared across the storefront and order PDFs.</p>
+      <div className="payment-settings-grid">
+        {draft.upiIds.map((upiId, index) => (
+          <label key={index}>
+            UPI ID {index + 1}
+            <input
+              type="text"
+              maxLength={100}
+              value={upiId}
+              disabled={!ready || saving}
+              onChange={(event) => setDraft((current) => ({
+                ...current,
+                upiIds: current.upiIds.map((value, itemIndex) => itemIndex === index ? event.target.value : value) as [string, string],
+                activeUpiId: current.activeUpiId === upiId ? event.target.value : current.activeUpiId,
+              }))}
+            />
+            <span className="payment-upi-choice">
+              <input
+                type="radio"
+                name="active-payment-upi"
+                checked={draft.activeUpiId === upiId}
+                disabled={!ready || saving || !upiId.trim()}
+                onChange={() => setDraft((current) => ({ ...current, activeUpiId: current.upiIds[index].trim() }))}
+              />
+              Use this ID for customer payments
+            </span>
+          </label>
+        ))}
+      </div>
+      <button type="button" className="save-product" disabled={!ready || saving} onClick={() => void save()}>
+        {saving ? "Saving payment details..." : "Save payment UPI"}
+      </button>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {status && <p className="catalog-maker-status" role="status">{status}</p>}
+    </section>
+  );
+}
+
 function Catalogue({
   products,
   setProducts,
@@ -2849,6 +2972,10 @@ function Catalogue({
   catalogueSaveStatus,
   onSaveCatalogue,
   catalogueApiReady,
+  paymentSettings,
+  paymentSettingsReady,
+  paymentSettingsError,
+  onSavePaymentSettings,
   rewardTiers,
   rewardTiersError,
   onSaveRewardTiers,
@@ -2869,6 +2996,10 @@ function Catalogue({
   catalogueSaveStatus: string;
   onSaveCatalogue: () => void;
   catalogueApiReady: boolean;
+  paymentSettings: PaymentSettings;
+  paymentSettingsReady: boolean;
+  paymentSettingsError: string;
+  onSavePaymentSettings: (settings: PaymentSettings) => Promise<PaymentSettings>;
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   onSaveRewardTiers: (tiers: RewardTier[]) => void;
@@ -3177,6 +3308,13 @@ function Catalogue({
           </div>
         ))}
       </section>
+      <PaymentSettingsEditor
+        key={paymentSettingsReady ? "payment-settings-ready" : "payment-settings-loading"}
+        settings={paymentSettings}
+        ready={paymentSettingsReady}
+        loadError={paymentSettingsError}
+        onSave={onSavePaymentSettings}
+      />
     </main>
   );
 }

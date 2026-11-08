@@ -17,6 +17,7 @@ const customersPath = resolve(storageDirectory, 'customers.json');
 const cartsPath = resolve(storageDirectory, 'customerCarts.json');
 const ordersPath = resolve(storageDirectory, 'customerOrders.json');
 const cataloguePath = resolve(storageDirectory, 'catalogue.json');
+const paymentSettingsPath = resolve(storageDirectory, 'paymentSettings.json');
 const sourceManifestPath = resolve(projectRoot, 'src', 'productImages.json');
 const sourceRewardTiersPath = resolve(projectRoot, 'src', 'rewardTiers.json');
 const uploadToken = process.env.PHOTO_UPLOAD_TOKEN || '';
@@ -34,6 +35,10 @@ const sessions = new Map();
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
 const passwordSaltBytes = 16;
 const passwordHashBytes = 64;
+const defaultPaymentSettings = {
+  upiIds: ['9000488963@ybl', '7780752396@ybl'],
+  activeUpiId: '9000488963@ybl',
+};
 const customerSessionCookie = 'slv_customer_session';
 const adminSessionCookie = 'slv_admin_session';
 const mimeTypes = {
@@ -820,6 +825,61 @@ async function handleCatalogueApi(request, response) {
   sendJson(response, 200, configuration);
 }
 
+function isPaymentSettings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { upiIds, activeUpiId } = value;
+  if (!Array.isArray(upiIds) || upiIds.length !== 2) return false;
+  const validUpiId = (upiId) => typeof upiId === 'string'
+    && upiId.length <= 100
+    && /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(upiId);
+  return validUpiId(upiIds[0])
+    && validUpiId(upiIds[1])
+    && upiIds[0].toLowerCase() !== upiIds[1].toLowerCase()
+    && validUpiId(activeUpiId)
+    && upiIds.includes(activeUpiId);
+}
+
+async function getPaymentSettings() {
+  try {
+    const settings = JSON.parse(await readFile(paymentSettingsPath, 'utf8'));
+    if (!isPaymentSettings(settings)) throw new Error('Saved payment settings are invalid.');
+    return settings;
+  } catch (error) {
+    if (error.code === 'ENOENT') return defaultPaymentSettings;
+    throw error;
+  }
+}
+
+async function handlePaymentSettingsApi(request, response) {
+  if (request.method === 'GET') {
+    sendJson(response, 200, await getPaymentSettings());
+    return;
+  }
+  if (request.method !== 'PUT') {
+    sendJson(response, 405, { error: 'Use GET to load or PUT to update payment settings.' });
+    return;
+  }
+  if (!isSecureUpload(request)) {
+    sendJson(response, 400, { error: 'Use HTTPS or an SSH tunnel to update payment settings.' });
+    return;
+  }
+  if (!getSession(request, 'admin')) {
+    sendJson(response, 401, { error: 'Sign in as the administrator to update payment settings.' });
+    return;
+  }
+  const settings = await parseJsonBody(request, response, 'Payment settings must contain valid JSON.');
+  if (!settings) return;
+  if (!isPaymentSettings(settings)) {
+    sendJson(response, 400, { error: 'Enter two different valid UPI IDs and select one as active.' });
+    return;
+  }
+  await mkdir(storageDirectory, { recursive: true });
+  const temporaryPath = `${paymentSettingsPath}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  await rename(temporaryPath, paymentSettingsPath);
+  sendJson(response, 200, settings);
+}
+
 async function readRequestBody(request) {
   const chunks = [];
   let totalBytes = 0;
@@ -1039,6 +1099,10 @@ const requestHandler = async (request, response) => {
     }
     if (url.pathname === '/api/catalogue') {
       await handleCatalogueApi(request, response);
+      return;
+    }
+    if (url.pathname === '/api/payment-settings') {
+      await handlePaymentSettingsApi(request, response);
       return;
     }
     if (url.pathname === '/api/customers') {
