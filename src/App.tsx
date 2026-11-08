@@ -1433,6 +1433,7 @@ function App() {
       : view === "admin-login" && adminAuthenticated
         ? "catalogue"
         : view;
+  const showClosureScreen = !isAdminView && renderedView !== "admin-login";
   const openAdmin = () => {
     navigate(adminAuthenticated ? "catalogue" : "admin-login");
   };
@@ -1585,11 +1586,19 @@ function App() {
     navigate("shop");
   };
   return (
-    <div className="site-shell">
-      <aside className="order-closure-notice" role="status" aria-label="Order and delivery update">
-        <strong>Orders are closed for new bookings right now.</strong>
-        <span>Orders already accepted will be delivered by 6:00 PM today.</span>
-      </aside>
+    <div className={`site-shell${showClosureScreen ? " closure-active" : ""}`}>
+      {showClosureScreen ? (
+        <main className="order-closure-screen" role="status" aria-label="Order and delivery update">
+          <div className="order-closure-card">
+            <span className="order-closure-mark" aria-hidden="true">SLV</span>
+            <p className="order-closure-kicker">SLV CRACKERS · SERVICE UPDATE</p>
+            <h1>We’re not accepting new orders right now.</h1>
+            <p className="order-closure-delivery">Orders already accepted will be delivered by <strong>6:00 PM today.</strong></p>
+            <p className="order-closure-thanks">Thank you for your understanding.</p>
+          </div>
+        </main>
+      ) : (
+      <>
       {renderedView !== "admin-login" && (
         <header className="site-header">
           <button
@@ -1983,6 +1992,8 @@ function App() {
             </div>
           </section>
         </div>
+      )}
+      </>
       )}
     </div>
   );
