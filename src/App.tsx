@@ -16,6 +16,7 @@ type Product = {
   price: number;
   discountPercent?: number;
   countsTowardTargetOffers?: boolean;
+  outOfStock?: boolean;
   pack: string;
   image: string;
 };
@@ -55,6 +56,7 @@ const isProductList = (value: unknown): value is Product[] =>
     && Number.isSafeInteger(product.price)
     && (product.discountPercent === undefined || (Number.isSafeInteger(product.discountPercent) && product.discountPercent >= 0 && product.discountPercent <= 90))
     && (product.countsTowardTargetOffers === undefined || typeof product.countsTowardTargetOffers === "boolean")
+    && (product.outOfStock === undefined || typeof product.outOfStock === "boolean")
     && typeof product.pack === "string"
     && typeof product.image === "string",
   );
@@ -140,13 +142,15 @@ const defaultOffers: Offer[] = [
   { id: "repeat-order", title: "Every next order", description: "Get ₹100 off on future purchases when your cart reaches the qualifying amount.", threshold: 1100, discount: 100, enabled: true },
 ];
 const money = (n: number) => `₹${n.toLocaleString("en-IN")}`;
-const upiId = "9000488963@ybl";
-const getUpiPaymentUri = (total: number) =>
-  `upi://pay?pa=${upiId}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
-const getUpiQrCodeUrl = (total: number) =>
-  `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(getUpiPaymentUri(total))}`;
-const loadUpiQrCode = async (total: number) => {
-  const response = await fetch(getUpiQrCodeUrl(total));
+const upiIds = ["9000488963@ybl", "7780752396@ybl"] as const;
+type UpiId = (typeof upiIds)[number];
+const defaultUpiId = upiIds[0];
+const getUpiPaymentUri = (total: number, selectedUpiId: UpiId = defaultUpiId) =>
+  `upi://pay?pa=${encodeURIComponent(selectedUpiId)}&pn=SLV%20CRACKERS&am=${total}&cu=INR`;
+const getUpiQrCodeUrl = (total: number, selectedUpiId: UpiId = defaultUpiId) =>
+  `https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=10&data=${encodeURIComponent(getUpiPaymentUri(total, selectedUpiId))}`;
+const loadUpiQrCode = async (total: number, selectedUpiId: UpiId = defaultUpiId) => {
+  const response = await fetch(getUpiQrCodeUrl(total, selectedUpiId));
   if (!response.ok) throw new Error("The UPI QR code could not be loaded for the order PDF.");
   const image = await response.blob();
   if (!image.type.startsWith("image/")) throw new Error("The UPI QR code service returned an invalid image.");
@@ -507,7 +511,7 @@ const downloadCartPdf = async (
     pdf.setTextColor(...colors.muted as [number, number, number]);
     pdf.text(rewardTermsText, margin + 2, y);
   }
-  const paymentSectionHeight = 42;
+  const paymentSectionHeight = 48;
   if (y + paymentSectionHeight > pageHeight - 14) {
     startNewPage();
     y += 6;
@@ -525,11 +529,12 @@ const downloadCartPdf = async (
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(8);
   pdf.setTextColor(...colors.ink as [number, number, number]);
-  pdf.text(`UPI ID: ${upiId}`, margin + 44, y + 19);
-  pdf.text(`Amount: ${pdfMoney(total)}`, margin + 44, y + 26);
+  pdf.text(`UPI ID: ${defaultUpiId}`, margin + 44, y + 18);
+  pdf.text(`Alternative UPI ID: ${upiIds[1]}`, margin + 44, y + 25);
+  pdf.text(`Amount: ${pdfMoney(total)}`, margin + 44, y + 32);
   pdf.setFontSize(6.5);
   pdf.setTextColor(...colors.muted as [number, number, number]);
-  pdf.text("Scan this QR code using any UPI app. Please verify the payee and amount before paying.", margin + 44, y + 33);
+  pdf.text("The QR uses the primary ID. Select the alternative ID in checkout if needed.", margin + 44, y + 40);
   const pageCount = pdf.getNumberOfPages();
   for (let page = 1; page <= pageCount; page += 1) {
     pdf.setPage(page);
@@ -1270,6 +1275,7 @@ function App() {
   const count = currentCart.reduce((sum, item) => sum + item.quantity, 0);
   const changeQuantity = (product: Product, delta: number) => {
     setCartNotice("");
+    if (product.outOfStock && delta > 0) return;
     setCart((items) => {
       const current =
         items.find((item) => item.id === product.id)?.quantity || 0;
@@ -1285,7 +1291,7 @@ function App() {
   };
   const submitOrderSelections = (selections: OrderSelection[]) => {
     setCartNotice("");
-    setCart((items) => selections.reduce((nextItems, selection) => {
+    setCart((items) => selections.filter((selection) => !products.find((product) => product.id === selection.product.id)?.outOfStock).reduce((nextItems, selection) => {
       const existing = nextItems.find((item) => item.id === selection.product.id);
       return existing
         ? nextItems.map((item) => item.id === selection.product.id ? { ...item, quantity: item.quantity + selection.quantity } : item)
@@ -1393,6 +1399,11 @@ function App() {
   };
   const startPayment = async () => {
     if (!user || cart.length === 0) return;
+    const soldOutItems = currentCart.filter((item) => item.outOfStock);
+    if (soldOutItems.length) {
+      setCartError(`Remove unavailable products before checkout: ${soldOutItems.map((item) => item.name).join(", ")}.`);
+      return;
+    }
     setPaymentError("");
     try {
       const response = await fetch("/api/customer-orders", {
@@ -1723,6 +1734,7 @@ function App() {
                             <button type="button" className="product-image-link" onClick={() => setSelectedProduct(product)}>
                               {product.name}
                             </button>
+                            {product.outOfStock && <span className="stock-badge">Out of stock</span>}
                             {product.pack && <small>{product.pack}</small>}
                           </div>
                         </div>
@@ -1738,9 +1750,10 @@ function App() {
                             type="number"
                             min="0"
                             value={quantity || ""}
+                            disabled={product.outOfStock}
                             onChange={(event) => changeQuantity(product, Number(event.target.value || 0) - quantity)}
                           />
-                          <button type="button" aria-label={`Increase quantity for ${product.name}`} onClick={() => changeQuantity(product, 1)}>+</button>
+                          <button type="button" aria-label={`Increase quantity for ${product.name}`} disabled={product.outOfStock} onClick={() => changeQuantity(product, 1)}>+</button>
                         </div>
                         <strong>{money(offerPrice * quantity)}</strong>
                       </div>
@@ -1764,6 +1777,7 @@ function App() {
           rewardTiers={rewardTiers}
           rewardTiersError={rewardTiersError}
           count={count}
+          hasUnavailableItems={currentCart.some((item) => item.outOfStock)}
           notice={cartNotice}
           onChange={changeQuantity}
           onBack={() => setShopView()}
@@ -1921,6 +1935,7 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
   const addItem = (event: FormEvent) => {
     event.preventDefault();
     if (!selected || quantity < 1) { setMessage("Enter a valid product ID and quantity."); return; }
+    if (selected.outOfStock) { setMessage(`${selected.name} is marked out of stock and cannot be added.`); return; }
     setSelections((items) => items.some((item) => item.product.id === selected.id)
       ? items.map((item) => item.product.id === selected.id ? { ...item, quantity: item.quantity + quantity } : item)
       : [...items, { product: selected, quantity }]);
@@ -1928,7 +1943,7 @@ function OrderEntry({ products, onSubmit, onCart }: { products: Product[]; onSub
     setProductId("");
     setQuantity(1);
   };
-  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={Math.max(1, ...products.map((product) => product.id))} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{selected.id} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span></div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit">Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{item.product.id}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product) => <div className="entry-product" key={product.id}><b>#{product.id}</b><span>{product.name}<small>{product.category}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
+  return <main className="order-entry-page"><div className="entry-header"><div><p className="admin-kicker">SLV / ORDER ENTRY</p><h1>Add items by product ID</h1><p>Select multiple products and quantities, then submit them together to the cart.</p></div><button className="download-pdf" onClick={onCart}>Go to cart</button></div><div className="order-entry-grid"><div><form className="order-entry-form" onSubmit={addItem}><label>Product ID<input type="number" min="1" max={Math.max(1, ...products.map((product) => product.id))} value={productId} onChange={(event) => setProductId(event.target.value)} placeholder="Example: 1" required /></label><label>Quantity<div className="entry-stepper"><button type="button" onClick={() => setQuantity(Math.max(1, quantity - 1))}>−</button><input type="number" min="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /><button type="button" onClick={() => setQuantity(quantity + 1)}>+</button></div></label>{selected && <div className="selected-product"><strong>#{selected.id} {selected.name}</strong><span>{selected.category} / {selected.pack} / {money(selected.price)}</span>{selected.outOfStock && <small className="stock-cart-warning">Out of stock</small>}</div>}{message && <p className="entry-message">{message}</p>}<button className="save-product" type="submit" disabled={selected?.outOfStock}>Add item</button></form></div><section className="entry-reference">{selections.length > 0 && <><h2>Selected items</h2>{selections.map((item) => <div className="entry-product selected-entry-product" key={item.product.id}><b>#{item.product.id}</b><span>{item.product.name}<small>Qty {item.quantity} × {money(item.product.price)}</small></span><strong>{money(item.product.price * item.quantity)}</strong><button type="button" onClick={() => setSelections(selections.filter((selectedItem) => selectedItem.product.id !== item.product.id))}>Remove</button></div>)}<div className="selection-total"><span>Estimated total</span><strong>{money(selections.reduce((sum, item) => sum + item.product.price * item.quantity, 0))}</strong></div><button className="save-product" type="button" onClick={() => onSubmit(selections)}>Submit selected items to cart →</button></>}<h2>Product IDs</h2>{products.map((product) => <div className="entry-product" key={product.id}><b>#{product.id}</b><span>{product.name}<small>{product.category}{product.outOfStock ? " · OUT OF STOCK" : ""}</small></span><strong>{money(product.price)}</strong></div>)}</section></div></main>;
 }
 
 function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiersError, onBack }: { offers: Offer[]; products: Product[]; categoryOffers: CategoryOffer[]; rewardTiers: RewardTier[]; rewardTiersError: string; onBack: () => void }) {
@@ -1940,7 +1955,7 @@ function OffersPage({ offers, products, categoryOffers, rewardTiers, rewardTiers
       <p className="offers-intro">Shopping rewards and eligible repeat-order discounts are applied when your cart meets the conditions.</p>
       {rewardTiersError && <p className="reward-api-error" role="alert">{rewardTiersError}</p>}
       <div className="offer-cards">
-        {products.filter((product) => product.discountPercent !== undefined && product.discountPercent > 0).map((product) => (
+        {products.filter((product) => !product.outOfStock && product.discountPercent !== undefined && product.discountPercent > 0).map((product) => (
           <article className="offer-card" key={`product-${product.id}`}>
             <span className="offer-card-mark">{product.discountPercent}% OFF</span>
             <div><p className="offer-card-kicker">ITEM OFFER</p><h2>{product.name}</h2><p>{product.category} · Save {money(product.price - getProductOfferPrice(product, categoryOffers))} per item.</p><strong>{money(product.price)} → {money(getProductOfferPrice(product, categoryOffers))}</strong></div>
@@ -2035,6 +2050,7 @@ function Cart({
   rewardTiers,
   rewardTiersError,
   count,
+  hasUnavailableItems,
   notice,
   onChange,
   onBack,
@@ -2053,6 +2069,7 @@ function Cart({
   rewardTiers: RewardTier[];
   rewardTiersError: string;
   count: number;
+  hasUnavailableItems: boolean;
   notice: string;
   onChange: (product: Product, delta: number) => void;
   onBack: () => void;
@@ -2118,6 +2135,7 @@ function Cart({
                 />
                 <div>
                   <strong>{item.name}</strong>
+                  {item.outOfStock && <small className="stock-cart-warning">Out of stock — remove this item to continue.</small>}
                   <small>
                     {getProductOfferPrice(item, categoryOffers) < item.price
                       ? <><del>{money(item.price)}</del> {money(getProductOfferPrice(item, categoryOffers))} ({getProductOfferPercent(item, categoryOffers)}% off)</>
@@ -2128,7 +2146,7 @@ function Cart({
                 <div className="stepper">
                   <button type="button" aria-label={`Decrease quantity for ${item.name}`} onClick={() => onChange(item, -1)}>−</button>
                   <span>{item.quantity}</span>
-                  <button type="button" aria-label={`Increase quantity for ${item.name}`} onClick={() => onChange(item, 1)}>+</button>
+                  <button type="button" aria-label={`Increase quantity for ${item.name}`} disabled={item.outOfStock} onClick={() => onChange(item, 1)}>+</button>
                 </div>
                 <strong>{money(getProductOfferPrice(item, categoryOffers) * item.quantity)}</strong>
               </div>
@@ -2157,11 +2175,12 @@ function Cart({
           {earnedCrackerValue > 0 && <p className="reward-summary-line">Fancy cracker gifts <b>{money(earnedCrackerValue)} value</b></p>}
           {earnedBonusPacks.map((pack) => <p className="reward-summary-line" key={pack}>Bonus gift <b>{pack}</b></p>)}
           <button
-            disabled={!cart.length}
+            disabled={!cart.length || hasUnavailableItems}
             onClick={() => user ? onCheckout() : onLogin()}
           >
             Proceed to payment →
           </button>
+          {hasUnavailableItems && <p className="stock-cart-warning" role="alert">Remove out-of-stock items before proceeding to payment.</p>}
         </aside>
       </div>
     </main>
@@ -2258,10 +2277,17 @@ function Auth({
 }
 
 function PaymentModal({ total, error, onClose, onPaid }: { total: number; error: string; onClose: () => void; onPaid: () => void }) {
-  const qrCodeUrl = getUpiQrCodeUrl(total);
+  const [selectedUpiId, setSelectedUpiId] = useState<UpiId>(defaultUpiId);
+  const [copyStatus, setCopyStatus] = useState("");
+  const qrCodeUrl = getUpiQrCodeUrl(total, selectedUpiId);
   const copyUpi = async () => {
-    await navigator.clipboard?.writeText(upiId);
-    alert("UPI number copied.");
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard access is unavailable in this browser.");
+      await navigator.clipboard.writeText(selectedUpiId);
+      setCopyStatus("UPI ID copied.");
+    } catch (cause) {
+      setCopyStatus(cause instanceof Error ? cause.message : "The UPI ID could not be copied.");
+    }
   };
   return (
     <div className="modal-backdrop payment-backdrop">
@@ -2269,9 +2295,26 @@ function PaymentModal({ total, error, onClose, onPaid }: { total: number; error:
         <button type="button" className="close" onClick={onClose} aria-label="Close payment">×</button>
         <p className="welcome-kicker">SECURE UPI PAYMENT</p>
         <h2 id="payment-title">Pay {money(total)}</h2>
-        <p className="payment-intro">Scan the QR code with any UPI app or use the UPI number below to complete your order.</p>
+        <p className="payment-intro">Choose a UPI ID, then scan its QR code or copy the ID to complete your order.</p>
+        <fieldset className="upi-options">
+          <legend>Choose payment UPI ID</legend>
+          {upiIds.map((upiOption, index) => (
+            <label key={upiOption} className={selectedUpiId === upiOption ? "upi-option-selected" : ""}>
+              <input
+                type="radio"
+                name="payment-upi-id"
+                value={upiOption}
+                checked={selectedUpiId === upiOption}
+                onChange={() => { setSelectedUpiId(upiOption); setCopyStatus(""); }}
+              />
+              <span>{upiOption}</span>
+              <small>{index === 0 ? "Primary" : "Alternative"}</small>
+            </label>
+          ))}
+        </fieldset>
         <div className="qr-frame"><img src={qrCodeUrl} alt={`UPI payment QR code for ${money(total)}`} /></div>
-        <div className="upi-row"><div><small>UPI number</small><strong>{upiId}</strong></div><button type="button" onClick={copyUpi}>Copy</button></div>
+        <div className="upi-row"><div><small>Selected UPI ID</small><strong>{selectedUpiId}</strong></div><button type="button" onClick={() => void copyUpi()}>Copy</button></div>
+        {copyStatus && <small className="upi-copy-status" role="status">{copyStatus}</small>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <button className="payment-confirm" type="button" onClick={onPaid}>I have completed the payment</button>
         <small className="payment-note">Your order is recorded after you confirm the payment.</small>
@@ -2841,6 +2884,7 @@ function Catalogue({
     category: "Sparklers",
     price: 0,
     discountPercent: undefined,
+    outOfStock: false,
     pack: "",
     image: seed[0].image,
   };
@@ -2978,6 +3022,15 @@ function Catalogue({
               }
             />
           </label>
+          <label className="product-stock-toggle">
+            <span>Mark this product as out of stock</span>
+            <input
+              type="checkbox"
+              checked={draft.outOfStock === true}
+              onChange={(event) => setDraft({ ...draft, outOfStock: event.target.checked })}
+            />
+            <small>Customers can still view the product, but cannot add it or check out with it while marked unavailable.</small>
+          </label>
           <label>
             Item offer (%)
             <input
@@ -3111,6 +3164,7 @@ function Catalogue({
             />
             <div>
               <strong>{product.name}</strong>
+              {product.outOfStock && <span className="stock-badge">Out of stock</span>}
               <small>
                 {product.category} / {product.pack}
               </small>
