@@ -1,0 +1,17 @@
+[Unit]
+Description=SLV Crackers website
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Blast-crackers
+EnvironmentFile=/etc/slv-crackers.env
+ExecStart=/usr/bin/node /home/ubuntu/Blast-crackers/server.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
